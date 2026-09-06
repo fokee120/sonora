@@ -318,15 +318,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       const data = await res.json();
-      if (data.tracks && data.tracks.length > 0) {
-        setTracks(data.tracks);
-        setAlbums(data.albums || []);
-        setArtists(data.artists || []);
+      setTracks(data.tracks || []);
+      setAlbums(data.albums || []);
+      setArtists(data.artists || []);
 
+      if (data.tracks && data.tracks.length > 0) {
         // Persist to IndexedDB
         await dbService.saveTracks(data.tracks);
         await dbService.saveAlbums(data.albums || []);
         await dbService.saveArtists(data.artists || []);
+      } else if (data.debug) {
+        const sampleNames = (data.debug.sampleFiles || [])
+          .map((file: { name: string }) => file.name)
+          .filter(Boolean)
+          .slice(0, 3)
+          .join(', ');
+        setLibraryError(
+          `Google Drive scan found ${data.debug.visibleFiles} visible files and ${data.debug.audioFiles} audio files. ${sampleNames ? `Sample files: ${sampleNames}` : 'Try disconnecting and signing in again with Drive permission.'}`
+        );
       }
     } catch (err: any) {
       console.error('Failed scanning Google Drive:', err);
