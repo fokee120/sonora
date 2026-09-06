@@ -121,9 +121,20 @@ const MainAppContent: React.FC = () => {
                   {currentTrack ? `Now Playing: ${currentTrack.title}` : 'High-Fidelity Audio'}
                 </div>
               </div>
-              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-500 to-purple-500 border border-white/10 flex items-center justify-center font-bold text-xs shadow-md">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!authSession.isAuthenticated) {
+                    setShowAuthModal(true);
+                  }
+                }}
+                className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-500 to-purple-500 border border-white/10 flex items-center justify-center font-bold text-xs shadow-md transition hover:scale-105 hover:border-white/25 focus:outline-hidden focus:ring-2 focus:ring-blue-400/60 disabled:cursor-default disabled:hover:scale-100"
+                title={authSession.isAuthenticated ? 'Signed in' : 'Sign in'}
+                aria-label={authSession.isAuthenticated ? 'Signed in' : 'Sign in'}
+                disabled={authSession.isAuthenticated}
+              >
                 {authSession.user?.name ? authSession.user.name.charAt(0).toUpperCase() : 'S'}
-              </div>
+              </button>
             </div>
           </header>
 
