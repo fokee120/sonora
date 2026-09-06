@@ -1,5 +1,14 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createHmac, timingSafeEqual } from 'crypto';
+
+type ApiRequest = {
+  method?: string;
+  headers: Record<string, string | string[] | undefined>;
+};
+
+type ApiResponse = {
+  setHeader: (name: string, value: string) => void;
+  status: (code: number) => { json: (body: unknown) => void };
+};
 
 function getAuthorizedEmails() {
   const raw = process.env.AUTHORIZED_EMAILS || 'fokee83@gmail.com';
@@ -47,7 +56,7 @@ function verifyAuthToken(token: string) {
   }
 }
 
-export default function handler(req: VercelRequest, res: VercelResponse) {
+export default function handler(req: ApiRequest, res: ApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -56,11 +65,12 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
   const authHeader = req.headers.authorization;
   const token = typeof authHeader === 'string' ? authHeader.replace(/^Bearer\s+/i, '').trim() : '';
   const user = token ? verifyAuthToken(token) : null;
+  const authorizedEmails = getAuthorizedEmails();
 
   return res.status(200).json({
     user,
     isAuthenticated: Boolean(user),
-    authRequired: getAuthorizedEmails().length > 0,
-    authorizedEmails: getAuthorizedEmails(),
+    authRequired: authorizedEmails.length > 0,
+    authorizedEmails,
   });
 }
