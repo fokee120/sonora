@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
+import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { GCSStorageProvider } from './src/server/storage/GCSStorageProvider.js';
 import {
@@ -31,15 +32,60 @@ const authorizedEmails = rawAuthorizedEmails
   .map((e) => e.trim().toLowerCase())
   .filter(Boolean);
 
-// In-memory sessions (token -> user email)
-const sessions = new Map<string, { email: string; name: string; expiresAt: number }>();
+const AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const authSecret = process.env.AUTH_SECRET || process.env.SESSION_SECRET;
 
-// Simple auth middleware helper
-function getAuthenticatedUser(req: express.Request) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return null;
+type AuthUserSession = { email: string; name: string; expiresAt: number };
 
-  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+// In-memory sessions (token -> user email). Used as a fallback when AUTH_SECRET is not configured.
+const sessions = new Map<string, AuthUserSession>();
+
+function signAuthPayload(payload: string) {
+  if (!authSecret) return null;
+  return crypto.createHmac('sha256', authSecret).update(payload).digest('base64url');
+}
+
+function createAuthToken(session: AuthUserSession) {
+  const payload = Buffer.from(JSON.stringify(session)).toString('base64url');
+  const signature = signAuthPayload(payload);
+  if (signature) {
+    return `tok_${payload}.${signature}`;
+  }
+
+  const token = 'tok_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
+  sessions.set(token, session);
+  return token;
+}
+
+function verifySignedAuthToken(token: string): AuthUserSession | null {
+  if (!authSecret || !token.startsWith('tok_')) return null;
+
+  const [payload, signature] = token.slice(4).split('.');
+  if (!payload || !signature) return null;
+
+  const expectedSignature = signAuthPayload(payload);
+  if (!expectedSignature) return null;
+
+  const signatureBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expectedSignature);
+  if (
+    signatureBuffer.length !== expectedBuffer.length ||
+    !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)
+  ) {
+    return null;
+  }
+
+  try {
+    const session = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8')) as AuthUserSession;
+    if (!session.email || !session.name || Date.now() > session.expiresAt) return null;
+    if (authorizedEmails.length > 0 && !authorizedEmails.includes(session.email.toLowerCase())) return null;
+    return session;
+  } catch {
+    return null;
+  }
+}
+
+function verifyInMemoryAuthToken(token: string): AuthUserSession | null {
   const session = sessions.get(token);
   if (!session) return null;
 
@@ -47,7 +93,22 @@ function getAuthenticatedUser(req: express.Request) {
     sessions.delete(token);
     return null;
   }
+
+  if (authorizedEmails.length > 0 && !authorizedEmails.includes(session.email.toLowerCase())) {
+    sessions.delete(token);
+    return null;
+  }
+
   return session;
+}
+
+// Simple auth middleware helper
+function getAuthenticatedUser(req: express.Request) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return null;
+
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+  return verifySignedAuthToken(token) || verifyInMemoryAuthToken(token);
 }
 
 // ----------------------------------------------------
@@ -149,20 +210,17 @@ app.post('/api/auth/login', (req, res) => {
     });
   }
 
-  // Create session
-  const token =
-    'tok_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
-  sessions.set(token, {
+  const session = {
     email: normalizedEmail,
     name: name || normalizedEmail.split('@')[0],
-    expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000, // 30 days
-  });
+    expiresAt: Date.now() + AUTH_SESSION_TTL_MS,
+  };
 
   res.json({
-    token,
+    token: createAuthToken(session),
     user: {
-      email: normalizedEmail,
-      name: name || normalizedEmail.split('@')[0],
+      email: session.email,
+      name: session.name,
     },
   });
 });
