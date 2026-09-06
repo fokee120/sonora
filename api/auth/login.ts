@@ -1,7 +1,16 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createHmac } from 'crypto';
 
 const AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+type ApiRequest = {
+  method?: string;
+  body?: any;
+};
+
+type ApiResponse = {
+  setHeader: (name: string, value: string) => void;
+  status: (code: number) => { json: (body: unknown) => void };
+};
 
 function getAuthorizedEmails() {
   const raw = process.env.AUTHORIZED_EMAILS || 'fokee83@gmail.com';
@@ -22,7 +31,7 @@ function createAuthToken(session: { email: string; name: string; expiresAt: numb
   return `tok_${payload}.${signature}`;
 }
 
-export default function handler(req: VercelRequest, res: VercelResponse) {
+export default function handler(req: ApiRequest, res: ApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
