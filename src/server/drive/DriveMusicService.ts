@@ -19,30 +19,56 @@ export class DriveMusicService {
       throw new Error('Access token is required to scan Google Drive');
     }
 
-    // Build query
-    let query = "trashed = false and (mimeType contains 'audio/' or name contains '.mp3' or name contains '.m4a' or name contains '.flac' or name contains '.wav' or name contains '.aac')";
+    const audioQuery = [
+      "mimeType contains 'audio/'",
+      "name contains '.mp3'",
+      "name contains '.MP3'",
+      "name contains '.m4a'",
+      "name contains '.M4A'",
+      "name contains '.flac'",
+      "name contains '.FLAC'",
+      "name contains '.wav'",
+      "name contains '.WAV'",
+      "name contains '.aac'",
+      "name contains '.AAC'",
+      "name contains '.ogg'",
+      "name contains '.OGG'",
+    ].join(' or ');
+
+    let query = `trashed = false and (${audioQuery})`;
     if (folderId) {
       query += ` and '${folderId}' in parents`;
     }
 
-    const driveUrl = new URL('https://www.googleapis.com/drive/v3/files');
-    driveUrl.searchParams.set('q', query);
-    driveUrl.searchParams.set('fields', 'nextPageToken, files(id, name, mimeType, size, modifiedTime, thumbnailLink, iconLink, parents)');
-    driveUrl.searchParams.set('pageSize', '100');
+    const driveFiles: any[] = [];
+    let pageToken: string | undefined;
 
-    const listRes = await fetch(driveUrl.toString(), {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
+    do {
+      const driveUrl = new URL('https://www.googleapis.com/drive/v3/files');
+      driveUrl.searchParams.set('q', query);
+      driveUrl.searchParams.set('fields', 'nextPageToken, files(id, name, mimeType, size, modifiedTime, thumbnailLink, iconLink, parents)');
+      driveUrl.searchParams.set('pageSize', '1000');
+      driveUrl.searchParams.set('includeItemsFromAllDrives', 'true');
+      driveUrl.searchParams.set('supportsAllDrives', 'true');
+      if (pageToken) {
+        driveUrl.searchParams.set('pageToken', pageToken);
+      }
 
-    if (!listRes.ok) {
-      const errorText = await listRes.text();
-      throw new Error(`Google Drive API error (${listRes.status}): ${errorText}`);
-    }
+      const listRes = await fetch(driveUrl.toString(), {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
 
-    const listData = await listRes.json();
-    const driveFiles: any[] = listData.files || [];
+      if (!listRes.ok) {
+        const errorText = await listRes.text();
+        throw new Error(`Google Drive API error (${listRes.status}): ${errorText}`);
+      }
+
+      const listData = await listRes.json();
+      driveFiles.push(...(listData.files || []));
+      pageToken = listData.nextPageToken;
+    } while (pageToken);
 
     if (driveFiles.length === 0) {
       return {
