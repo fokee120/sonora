@@ -19,23 +19,7 @@ export class DriveMusicService {
       throw new Error('Access token is required to scan Google Drive');
     }
 
-    const audioQuery = [
-      "mimeType contains 'audio/'",
-      "name contains '.mp3'",
-      "name contains '.MP3'",
-      "name contains '.m4a'",
-      "name contains '.M4A'",
-      "name contains '.flac'",
-      "name contains '.FLAC'",
-      "name contains '.wav'",
-      "name contains '.WAV'",
-      "name contains '.aac'",
-      "name contains '.AAC'",
-      "name contains '.ogg'",
-      "name contains '.OGG'",
-    ].join(' or ');
-
-    let query = `trashed = false and (${audioQuery})`;
+    let query = "trashed = false and mimeType != 'application/vnd.google-apps.folder'";
     if (folderId) {
       query += ` and '${folderId}' in parents`;
     }
@@ -70,7 +54,9 @@ export class DriveMusicService {
       pageToken = listData.nextPageToken;
     } while (pageToken);
 
-    if (driveFiles.length === 0) {
+    const audioFiles = driveFiles.filter((file) => this.isAudioFile(file));
+
+    if (audioFiles.length === 0) {
       return {
         tracks: [],
         albums: [],
@@ -85,8 +71,8 @@ export class DriveMusicService {
 
     // Process files in concurrency batches of 5 to avoid rate limits
     const BATCH_SIZE = 5;
-    for (let i = 0; i < driveFiles.length; i += BATCH_SIZE) {
-      const batch = driveFiles.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < audioFiles.length; i += BATCH_SIZE) {
+      const batch = audioFiles.slice(i, i + BATCH_SIZE);
       const batchResults = await Promise.all(
         batch.map((file) => this.extractMetadataFromDriveFile(file, accessToken))
       );
@@ -104,6 +90,16 @@ export class DriveMusicService {
       totalCount: tracks.length,
       scannedAt: new Date().toISOString(),
     };
+  }
+
+  private isAudioFile(file: any): boolean {
+    const name = String(file.name || '').toLowerCase();
+    const mimeType = String(file.mimeType || '').toLowerCase();
+
+    return (
+      mimeType.startsWith('audio/') ||
+      /\.(mp3|m4a|flac|wav|aac|ogg|opus)$/i.test(name)
+    );
   }
 
   /**
@@ -217,7 +213,7 @@ export class DriveMusicService {
     trackNumber?: number;
   } {
     // Remove extension
-    const cleanName = filename.replace(/\.(mp3|m4a|flac|wav|aac|ogg)$/i, '').trim();
+    const cleanName = filename.replace(/\.(mp3|m4a|flac|wav|aac|ogg|opus)$/i, '').trim();
 
     let trackNumber: number | undefined;
     let artist = 'Unknown Artist';
@@ -254,13 +250,15 @@ export class DriveMusicService {
 
   private detectFormat(filename: string, mimeType?: string): string {
     const ext = filename.split('.').pop()?.toUpperCase();
-    if (ext && ['MP3', 'M4A', 'FLAC', 'WAV', 'AAC', 'OGG'].includes(ext)) {
+    if (ext && ['MP3', 'M4A', 'FLAC', 'WAV', 'AAC', 'OGG', 'OPUS'].includes(ext)) {
       return ext;
     }
     if (mimeType?.includes('mpeg') || mimeType?.includes('mp3')) return 'MP3';
     if (mimeType?.includes('m4a') || mimeType?.includes('mp4')) return 'M4A';
     if (mimeType?.includes('flac')) return 'FLAC';
     if (mimeType?.includes('wav')) return 'WAV';
+    if (mimeType?.includes('ogg')) return 'OGG';
+    if (mimeType?.includes('opus')) return 'OPUS';
     return 'AUDIO';
   }
 
