@@ -15,14 +15,14 @@ export function useNetworkState(): NetworkStatus {
   const [lastChecked, setLastChecked] = useState<number>(Date.now());
 
   const checkRealConnectivity = useCallback(async (): Promise<boolean> => {
-    if (!navigator.onLine) {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
       setIsOnline(false);
+      setLastChecked(Date.now());
       return false;
     }
 
     setIsChecking(true);
     try {
-      // Ping our own lightweight health endpoint with cache busting
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 4000);
 
@@ -39,16 +39,18 @@ export function useNetworkState(): NetworkStatus {
       setIsChecking(false);
       return online;
     } catch {
-      setIsOnline(false);
+      const online = typeof navigator !== 'undefined' ? navigator.onLine : true;
+      setIsOnline(online);
       setLastChecked(Date.now());
       setIsChecking(false);
-      return false;
+      return online;
     }
   }, []);
 
   useEffect(() => {
     const handleOnline = () => {
-      // Don't just trust the event; verify with real request
+      setIsOnline(true);
+      setLastChecked(Date.now());
       checkRealConnectivity();
     };
 
@@ -57,15 +59,28 @@ export function useNetworkState(): NetworkStatus {
       setLastChecked(Date.now());
     };
 
+    const handleFocus = () => {
+      checkRealConnectivity();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkRealConnectivity();
+      }
+    };
+
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // Periodic check every 30 seconds
     const interval = setInterval(checkRealConnectivity, 30000);
 
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       clearInterval(interval);
     };
   }, [checkRealConnectivity]);
