@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
-import crypto from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { GCSStorageProvider } from './src/server/storage/GCSStorageProvider.js';
 import {
@@ -42,7 +42,7 @@ const sessions = new Map<string, AuthUserSession>();
 
 function signAuthPayload(payload: string) {
   if (!authSecret) return null;
-  return crypto.createHmac('sha256', authSecret).update(payload).digest('base64url');
+  return createHmac('sha256', authSecret).update(payload).digest('base64url');
 }
 
 function createAuthToken(session: AuthUserSession) {
@@ -70,7 +70,7 @@ function verifySignedAuthToken(token: string): AuthUserSession | null {
   const expectedBuffer = Buffer.from(expectedSignature);
   if (
     signatureBuffer.length !== expectedBuffer.length ||
-    !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)
+    !timingSafeEqual(signatureBuffer, expectedBuffer)
   ) {
     return null;
   }
