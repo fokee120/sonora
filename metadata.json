@@ -1,0 +1,6 @@
+{
+  "name": "Personal Music Player",
+  "description": "Full-stack personal music streaming app connected with Google Drive to stream MP3 files, parse artist and album ID3 metadata, and create custom playlists.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
