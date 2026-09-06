@@ -8,6 +8,11 @@ export interface DriveScanResult {
   source: 'google_drive';
   totalCount: number;
   scannedAt: string;
+  debug?: {
+    visibleFiles: number;
+    audioFiles: number;
+    sampleFiles: { name: string; mimeType?: string }[];
+  };
 }
 
 export class DriveMusicService {
@@ -55,6 +60,7 @@ export class DriveMusicService {
     } while (pageToken);
 
     const audioFiles = driveFiles.filter((file) => this.isAudioFile(file));
+    const debug = this.createDebugInfo(driveFiles, audioFiles);
 
     if (audioFiles.length === 0) {
       return {
@@ -64,6 +70,7 @@ export class DriveMusicService {
         source: 'google_drive',
         totalCount: 0,
         scannedAt: new Date().toISOString(),
+        debug,
       };
     }
 
@@ -89,11 +96,23 @@ export class DriveMusicService {
       source: 'google_drive',
       totalCount: tracks.length,
       scannedAt: new Date().toISOString(),
+      debug,
+    };
+  }
+
+  private createDebugInfo(driveFiles: any[], audioFiles: any[]) {
+    return {
+      visibleFiles: driveFiles.length,
+      audioFiles: audioFiles.length,
+      sampleFiles: driveFiles.slice(0, 10).map((file) => ({
+        name: String(file.name || ''),
+        mimeType: file.mimeType ? String(file.mimeType) : undefined,
+      })),
     };
   }
 
   private isAudioFile(file: any): boolean {
-    const name = String(file.name || '').toLowerCase();
+    const name = String(file.name || '').trim();
     const mimeType = String(file.mimeType || '').toLowerCase();
 
     return (
