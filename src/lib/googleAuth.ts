@@ -88,33 +88,18 @@ export const saveDriveSessionToServer = async (
 
 /**
  * Initialize auth listener.
- * Automatically checks server-side session first so login is retained across refreshes!
+ * Only marks Drive as connected when this browser has a real Google Drive access token.
  */
 export const initGoogleAuth = (
   onAuthChange: (user: any | null, accessToken: string | null) => void
 ) => {
-  // Check server-side session immediately
-  fetchServerDriveSession().then((serverSession) => {
-    if (serverSession.connected && serverSession.user) {
-      // Server already has an active login
-      const token = cachedAccessToken || 'server-active-token';
-      onAuthChange(serverSession.user, token);
-    }
-  });
-
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (!user) {
-      // Even if Firebase client user is null, check if server has persistent login
-      const serverSession = await fetchServerDriveSession();
-      if (serverSession.connected && serverSession.user) {
-        onAuthChange(serverSession.user, cachedAccessToken || 'server-active-token');
-      } else {
-        cachedAccessToken = null;
-        if (typeof window !== 'undefined') {
-          localStorage.removeItem('gdrive_access_token');
-        }
-        onAuthChange(null, null);
+      cachedAccessToken = null;
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('gdrive_access_token');
       }
+      onAuthChange(null, null);
       return;
     }
 
@@ -128,13 +113,7 @@ export const initGoogleAuth = (
       });
       onAuthChange(user, cachedAccessToken);
     } else if (!isSigningIn) {
-      // Check if server already has the token stored
-      const serverSession = await fetchServerDriveSession();
-      if (serverSession.connected) {
-        onAuthChange(user, 'server-active-token');
-      } else {
-        onAuthChange(user, null);
-      }
+      onAuthChange(user, null);
     }
   });
 };
