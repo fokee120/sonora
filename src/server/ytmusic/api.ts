@@ -2,6 +2,7 @@ import express from 'express';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { youtubeMusicClient } from './YoutubeMusicClient.js';
+import { matchingUploads } from './matchingUploads.js';
 import { downloaderService } from './DownloaderService.js';
 
 const app = express();
@@ -38,7 +39,7 @@ async function proxyMediaResponse(
     const reader = upstream.body.getReader();
     const first = await reader.read();
     if (first.done) {
-      throw new Error('Cobalt returned an empty audio stream. Check the Cobalt terminal for this track.');
+      throw Object.assign(new Error('Cobalt returned an empty audio stream for this upload.'), { code: 'EMPTY_AUDIO' });
     }
     async function* chunks() {
       try {
@@ -200,7 +201,32 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
     }
 
     res.setHeader('X-Download-Via', via);
-    await proxyMediaResponse(res, mediaUrl, req.headers.range, mimeType);
+    try {
+      await proxyMediaResponse(res, mediaUrl, req.headers.range, mimeType);
+    } catch (error: any) {
+      // Retry only before any bytes are sent, and only for the known empty-upload failure.
+      if (error?.code !== 'EMPTY_AUDIO' || via !== 'downloader' || res.headersSent || res.destroyed) throw error;
+      const title = typeof req.query.title === 'string' ? req.query.title.slice(0, 300).trim() : '';
+      const artist = typeof req.query.artist === 'string' ? req.query.artist.slice(0, 200).trim() : '';
+      const durationSeconds = Number(req.query.duration);
+      if (!title || !artist || !Number.isFinite(durationSeconds) || durationSeconds <= 0) throw error;
+      const original = { videoId, title, artist, durationSeconds };
+      const results = await youtubeMusicClient.search(`${artist} ${title}`, 'videos');
+      for (const candidate of matchingUploads(original, results.songs).slice(0, 2)) {
+        if (res.destroyed) return;
+        const replacement = await downloaderService.resolveAudioUrl(candidate.videoId);
+        if (!replacement.ok || !replacement.url) continue;
+        try {
+          res.setHeader('X-Audio-Video-Id', candidate.videoId);
+          await proxyMediaResponse(res, replacement.url, req.headers.range, mimeType);
+          return;
+        } catch (retryError: any) {
+          if (res.headersSent || res.destroyed) throw retryError;
+          res.removeHeader('X-Audio-Video-Id');
+        }
+      }
+      throw new Error('Cobalt returned empty audio and no matching playable upload was found. Try another search result.');
+    }
   } catch (err: any) {
     console.error('YT Music download error:', err);
     if (!res.headersSent) {

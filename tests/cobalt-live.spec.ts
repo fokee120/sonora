@@ -11,15 +11,16 @@ test('real Cobalt MP3 plays, seeks, downloads through the button and plays offli
   const server = api.listen(0, '127.0.0.1');
   await new Promise<void>(resolve => server.once('listening', resolve));
   const { port } = server.address() as { port: number };
-  const track = { id: 'ytm:dQw4w9WgXcQ', source: 'ytmusic', sourceId: 'dQw4w9WgXcQ', cloudKey: 'ytmusic://dQw4w9WgXcQ', title: 'Never Gonna Give You Up', artist: 'Rick Astley', album: 'Whenever You Need Somebody', duration: 214, format: 'mp3' };
+  const track = { id: 'ytm:lYBUbBu4W08', source: 'ytmusic', sourceId: 'lYBUbBu4W08', cloudKey: 'ytmusic://lYBUbBu4W08', title: 'Never Gonna Give You Up', artist: 'Rick Astley', album: 'Whenever You Need Somebody', duration: 214, format: 'mp3' };
   const requests: string[] = [];
   try {
     await page.route('**/api/**', async route => {
-      const path = new URL(route.request().url()).pathname;
+      const requestUrl = new URL(route.request().url());
+      const path = requestUrl.pathname;
       if (/\/api\/ytmusic\/(stream|download)\//.test(path)) {
         expect(route.request().headers().range).toBeUndefined();
         requests.push(path);
-        const response = await route.fetch({ url: `http://127.0.0.1:${port}${path}`, timeout: 90000 });
+        const response = await route.fetch({ url: `http://127.0.0.1:${port}${path}${requestUrl.search}`, timeout: 90000 });
         expect(response.status()).toBe(200);
         expect(response.headers()['content-type']).toContain('audio/mpeg');
         return route.fulfill({ response });
@@ -30,7 +31,7 @@ test('real Cobalt MP3 plays, seeks, downloads through the button and plays offli
     });
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    const row = page.locator('[id="track-row-ytm:dQw4w9WgXcQ"]').first();
+    const row = page.locator('[id="track-row-ytm:lYBUbBu4W08"]').first();
     await row.getByText(track.title, { exact: true }).click();
     const state = () => page.evaluate(async () => {
       const path = '/src/lib/audio/PlayerEngine.ts';
@@ -49,7 +50,7 @@ test('real Cobalt MP3 plays, seeks, downloads through the button and plays offli
     await expect(row.getByTitle('Downloaded offline. Click to remove from local storage.')).toBeVisible({ timeout: 60000 });
     const saved = await page.evaluate(async () => {
       const path = '/src/lib/db.ts';
-      const blob = await (await import(path)).dbService.getAudioBlob('ytm:dQw4w9WgXcQ');
+      const blob = await (await import(path)).dbService.getAudioBlob('ytm:lYBUbBu4W08');
       return { size: blob.size, type: blob.type };
     });
     expect(saved.size).toBeGreaterThan(1000000);

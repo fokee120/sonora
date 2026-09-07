@@ -72,7 +72,8 @@ export async function fetchTrackAudio(track: Track, signal?: AbortSignal): Promi
 
 /** A single full GET avoids unsupported Range requests on transcoded Cobalt audio. */
 export async function fetchYoutubeAudio(track: Track, signal?: AbortSignal, download = false): Promise<Response> {
-  const response = await fetch(download ? youtubeDownloadUrl(track) : youtubeStreamUrl(track), {
+  const metadata = new URLSearchParams({ title: track.title, artist: track.artist, duration: String(track.duration || 0) });
+  const response = await fetch(`${download ? youtubeDownloadUrl(track) : youtubeStreamUrl(track)}?${metadata}`, {
     signal, cache: 'no-store',
   });
   if (!response.ok) {
