@@ -1,5 +1,6 @@
 import express from 'express';
 import { Readable } from 'stream';
+import { pipeline } from 'stream/promises';
 import { youtubeMusicClient } from './YoutubeMusicClient.js';
 import { downloaderService } from './DownloaderService.js';
 
@@ -8,46 +9,64 @@ app.use(express.json());
 
 const VALID_YT_VIDEO_ID = /^[\w-]{11}$/;
 
-// Proxy a resolved media URL to the client with HTTP Range (scrubbing) support.
+// Await the entire transfer: unhandled upstream stream errors can crash a function.
 async function proxyMediaResponse(
   res: express.Response,
   mediaUrl: string,
   rangeHeader: string | undefined,
-  fallbackMime = 'audio/mp4'
+  fallbackMime = 'audio/mpeg'
 ): Promise<void> {
-  const upstreamHeaders: Record<string, string> = {};
-  if (rangeHeader) {
-    upstreamHeaders['Range'] = rangeHeader;
-  }
-
-  const upstream = await fetch(mediaUrl, { headers: upstreamHeaders });
-  if (!upstream.ok && upstream.status !== 206) {
-    const detail = await upstream.text().catch(() => '');
-    throw Object.assign(new Error(`Upstream media error (${upstream.status}) ${detail.slice(0, 200)}`), {
-      status: upstream.status === 403 ? 502 : upstream.status,
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  res.on('close', cancel);
+  const timeout = setTimeout(cancel, 120000);
+  try {
+    const upstream = await fetch(mediaUrl, {
+      headers: rangeHeader ? { Range: rangeHeader } : {},
+      signal: controller.signal,
     });
-  }
-
-  const contentType = upstream.headers.get('content-type');
-  if (contentType && /text\/|application\/(json|xml)/i.test(contentType)) {
-    await upstream.body?.cancel();
-    throw new Error('Audio provider returned a page or error instead of audio. Check the downloader configuration.');
-  }
-  res.status(upstream.status);
-  res.setHeader('Content-Type', contentType && !contentType.includes('text/html') ? contentType : fallbackMime);
-  res.setHeader('Accept-Ranges', 'bytes');
-  res.setHeader('Cache-Control', 'no-store');
-  for (const key of ['content-range', 'content-length']) {
-    const value = upstream.headers.get(key);
-    if (value) res.setHeader(key, value);
-  }
-
-  if (upstream.body) {
-    // @ts-ignore - Node web streams interop
-    const stream = Readable.fromWeb ? Readable.fromWeb(upstream.body as any) : Readable.from(upstream.body as any);
-    stream.pipe(res);
-  } else {
-    res.end();
+    if (!upstream.ok) {
+      await upstream.body?.cancel();
+      throw Object.assign(new Error('Cobalt audio transfer failed (HTTP ' + upstream.status + '). Retry the track; if it persists, check the Cobalt log.'), { status: 502 });
+    }
+    const contentType = upstream.headers.get('content-type') || fallbackMime;
+    if (/text\/|application\/(json|xml)/i.test(contentType)) {
+      await upstream.body?.cancel();
+      throw new Error('Audio provider returned a page or error instead of audio. Check the downloader configuration.');
+    }
+    if (!upstream.body) throw new Error('Cobalt returned no audio data.');
+    const reader = upstream.body.getReader();
+    const first = await reader.read();
+    if (first.done) {
+      throw new Error('Cobalt returned an empty audio stream. Check the Cobalt terminal for this track.');
+    }
+    async function* chunks() {
+      try {
+        yield first.value;
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          yield chunk.value;
+        }
+      } finally {
+        await reader.cancel().catch(() => {});
+      }
+    }
+    res.status(upstream.status);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'no-store');
+    // Transcoded Cobalt MP3s are chunked and often ignore Range. Do not promise seeking.
+    if (upstream.status === 206 || upstream.headers.get('accept-ranges') === 'bytes') {
+      res.setHeader('Accept-Ranges', 'bytes');
+    }
+    for (const key of ['content-range', 'content-length', 'estimated-content-length']) {
+      const value = upstream.headers.get(key);
+      if (value) res.setHeader(key, value);
+    }
+    await pipeline(Readable.from(chunks()), res);
+  } finally {
+    clearTimeout(timeout);
+    res.off('close', cancel);
   }
 }
 
@@ -79,89 +98,33 @@ app.post('/api/ytmusic/downloader-config', (req, res) => {
   res.json({
     success: true,
     downloader: {
-      ...config,
+      enabled: config.enabled,
+      url: config.url,
+      audioFormat: config.audioFormat,
       configured: downloaderService.isConfigured(),
       hasApiKey: Boolean(config.apiKey),
     },
   });
 });
 
-// Verify the configured third-party downloader responds like a
-// Cobalt-compatible API (reachability + response shape).
+// Exercise the same resolver as playback and verify that it actually delivers bytes.
 app.post('/api/ytmusic/downloader-test', async (req, res) => {
   try {
-    if (!downloaderService.isConfigured()) {
-      return res.json({ ok: false, message: 'No downloader URL configured.' });
+    const result = await downloaderService.resolveAudioUrl('dQw4w9WgXcQ');
+    if (!result.ok || !result.url) return res.json({ ok: false, message: result.error || 'Cobalt returned no audio URL.' });
+    const response = await fetch(result.url, { signal: AbortSignal.timeout(30000) });
+    const type = response.headers.get('content-type') || '';
+    if (!response.ok || /text\/|application\/(json|xml)/i.test(type)) {
+      await response.body?.cancel();
+      return res.json({ ok: false, message: 'Cobalt resolved the track, but audio delivery failed (HTTP ' + response.status + ').' });
     }
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    };
-    const cfg = downloaderService.getConfig();
-    if (cfg.apiKey) headers.Authorization = `Api-Key ${cfg.apiKey}`;
-
-    try {
-      const testRes = await fetch(cfg.url, {
-        method: 'POST',
-        headers,
-        signal: controller.signal,
-        body: JSON.stringify({
-          url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-          downloadMode: 'audio',
-          audioFormat: cfg.audioFormat,
-          audioBitrate: '128',
-          filenameStyle: 'basic',
-          localProcessing: 'disabled',
-        }),
-      });
-      const data = await testRes.json().catch(() => null);
-
-      if (!testRes.ok) {
-        const code =
-          typeof data?.error === 'string'
-            ? data.error
-            : data?.error?.code || `HTTP ${testRes.status}`;
-        return res.json({
-          ok: false,
-          message: `Instance reachable but rejected the request (${code}). Check API key / instance settings.`,
-        });
-      }
-
-      if (data?.status === 'tunnel' || data?.status === 'redirect' || data?.url) {
-        return res.json({
-          ok: true,
-          message: `Downloader works — returned a media URL (${data.status}).`,
-        });
-      }
-      if (data?.status === 'error') {
-        const code = typeof data.error === 'string' ? data.error : data.error?.code;
-        return res.json({
-          ok: false,
-          message: `Instance replied with an error (${code || 'unknown'}). It may not support YouTube audio.`,
-        });
-      }
-      if (data?.status) {
-        return res.json({
-          ok: true,
-          message: `Instance responded with status "${data.status}" — recognized as Cobalt-compatible.`,
-        });
-      }
-      return res.json({
-        ok: false,
-        message: 'Instance responded but not with a Cobalt-compatible JSON shape.',
-      });
-    } finally {
-      clearTimeout(timeout);
-    }
+    const reader = response.body?.getReader();
+    const first = await reader?.read();
+    await reader?.cancel();
+    if (!first?.value?.length) return res.json({ ok: false, message: 'Cobalt returned an empty audio stream. Check its terminal and extractor configuration.' });
+    return res.json({ ok: true, message: 'Cobalt delivered audio successfully. Sonora can play and download this test track.' });
   } catch (err: any) {
-    const message =
-      err?.name === 'AbortError'
-        ? 'Instance did not respond within 15s.'
-        : err?.message || 'Could not reach the downloader instance.';
-    res.json({ ok: false, message });
+    return res.json({ ok: false, message: err?.message || 'Cobalt audio transfer failed.' });
   }
 });
 
@@ -226,7 +189,7 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
         else if (downloaderService.getConfig().audioFormat === 'opus') mimeType = 'audio/opus';
         via = 'downloader';
       } else {
-        console.warn(`Third-party downloader failed (${dlResult.error}); falling back to direct stream.`);
+        throw new Error(dlResult.error || 'Cobalt could not resolve this audio.');
       }
     }
 
@@ -242,7 +205,7 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
     console.error('YT Music download error:', err);
     if (!res.headersSent) {
       res.status(err?.status || 502).json({
-        error: 'Could not download this track',
+        error: 'Could not load Cobalt audio',
         details: err?.message,
       });
     }

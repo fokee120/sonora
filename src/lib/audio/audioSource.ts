@@ -62,9 +62,7 @@ export async function cloudStreamUrl(track: Track, signal?: AbortSignal): Promis
 
 export async function fetchTrackAudio(track: Track, signal?: AbortSignal): Promise<Response> {
   if (isYoutubeTrack(track)) {
-    const response = await fetch(youtubeDownloadUrl(track), { signal, cache: 'no-store' });
-    if (!response.ok) throw await responseError(response, 'Could not download YouTube audio');
-    return response;
+    return fetchYoutubeAudio(track, signal, true);
   }
   if (isDriveTrack(track)) return fetchDriveAudio(track, { signal });
   const response = await fetch(await cloudStreamUrl(track, signal), { signal });
@@ -72,15 +70,20 @@ export async function fetchTrackAudio(track: Track, signal?: AbortSignal): Promi
   return response;
 }
 
-/** Read proxy failures as JSON instead of exposing the browser's codec error. */
-export async function youtubePlaybackError(track: Track, signal: AbortSignal): Promise<Error> {
-  const response = await fetch(youtubeStreamUrl(track), {
-    signal, cache: 'no-store', headers: { Range: 'bytes=0-0' },
+/** A single full GET avoids unsupported Range requests on transcoded Cobalt audio. */
+export async function fetchYoutubeAudio(track: Track, signal?: AbortSignal, download = false): Promise<Response> {
+  const response = await fetch(download ? youtubeDownloadUrl(track) : youtubeStreamUrl(track), {
+    signal, cache: 'no-store',
   });
   if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    return new Error(data.details || data.error || 'YouTube audio is unavailable. Check the downloader configuration in Settings.');
+    const data = await response.json().catch(() => null);
+    const detail = data?.details || data?.error;
+    throw new Error(typeof detail === 'string' ? detail : 'Sonora audio request failed (HTTP ' + response.status + '). Please retry.');
   }
-  await response.body?.cancel();
-  return new Error('This audio format could not be played. Configure the YouTube audio downloader to use MP3 or M4A in Settings.');
+  const contentType = response.headers.get('content-type') || '';
+  if (/text\/|application\/(json|xml)/i.test(contentType)) {
+    await response.body?.cancel();
+    throw new Error('Cobalt returned a page instead of audio. Check that the tunnel points to the Cobalt API.');
+  }
+  return response;
 }

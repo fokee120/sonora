@@ -216,3 +216,7 @@ Private personal project. Add a license before publishing or accepting outside c
 ## YouTube Music audio playback
 
 Search and audio delivery are separate services. Playback uses the existing Sonora player and the same server audio resolver as offline downloads. For hosts where YouTube blocks direct audio access, configure a working Cobalt-compatible instance with `COBALT_API_URL` and, if needed, `COBALT_API_KEY`. Use `YT_DOWNLOADER_AUDIO_FORMAT=mp3` for broad browser compatibility. Set these in the hosting environment and redeploy; runtime Settings are temporary and instance-specific on serverless hosts. Public fallback services are best-effort and may be unavailable.
+
+Cobalt playback uses Sonora’s native audio element with a completed in-memory audio file, so transcoded streams support reliable seeking. The song may take a few seconds to prepare before playback. The download button stores the Cobalt audio in IndexedDB for offline playback. Keep your Cobalt server and tunnel running. An empty Cobalt response is reported as an error instead of being stored as a successful download.
+
+To run the optional real-Cobalt browser check, set `COBALT_LIVE_URL` and run `npx playwright test tests/cobalt-live.spec.ts`. Set `PLAYWRIGHT_EXECUTABLE_PATH` to test an installed Brave browser in an isolated test profile.

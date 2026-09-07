@@ -1,7 +1,7 @@
 import { Track, PlayerState, RepeatMode, QueueItem } from '../../types/index.js';
 import { offlineManager } from '../offline/OfflineManager.js';
 import { dbService } from '../db.js';
-import { cloudStreamUrl, fetchDriveAudio, isDriveTrack, youtubeStreamUrl, youtubePlaybackError } from './audioSource.js';
+import { cloudStreamUrl, fetchDriveAudio, isDriveTrack, fetchYoutubeAudio } from './audioSource.js';
 import { isYoutubeTrack } from '../ytmusic/youtubeMusic.js';
 
 type StateListener = (state: PlayerState) => void;
@@ -294,8 +294,14 @@ export class PlayerEngine {
 
       this.state.playbackSource = 'cloud';
       if (isYoutubeTrack(track)) {
-        // Streams through the server-side YT Music proxy (Range supported).
-        this.audio.src = youtubeStreamUrl(track);
+        // Cobalt transcodes into a non-seekable HTTP stream. A completed Blob gives
+        // the native Sonora player reliable metadata and local seeking in Brave too.
+        const response = await fetchYoutubeAudio(track, controller.signal);
+        const blob = await response.blob();
+        controller.signal.throwIfAborted();
+        if (!blob.size) throw new Error('Cobalt returned an empty audio file. Retry the track.');
+        this.currentObjectUrl = URL.createObjectURL(blob);
+        this.audio.src = this.currentObjectUrl;
       } else if (isDriveTrack(track)) {
         const response = await fetchDriveAudio(track, { signal: controller.signal });
         const blob = await response.blob();
@@ -311,9 +317,8 @@ export class PlayerEngine {
       this.notifyState();
     } catch (err: any) {
       if (controller.signal.aborted) return;
-      if (isYoutubeTrack(track) && err.name !== 'NotAllowedError') {
-        try { err = await youtubePlaybackError(track, controller.signal); } catch { /* Preserve the original error if the network fails. */ }
-        if (controller.signal.aborted) return;
+      if (isYoutubeTrack(track) && err.name === 'NotSupportedError') {
+        err = new Error('This Cobalt audio could not be decoded. Select MP3 in Settings and try again.');
       }
       console.error('Error starting playback:', err);
       this.state.isLoading = false;

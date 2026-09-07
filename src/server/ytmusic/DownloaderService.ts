@@ -112,6 +112,7 @@ class DownloaderService {
         body: JSON.stringify({
           url: `https://www.youtube.com/watch?v=${videoId}`,
           downloadMode: 'audio',
+          alwaysProxy: true,
           audioFormat: this.config.audioFormat,
           audioBitrate: '128',
           filenameStyle: 'basic',
@@ -149,7 +150,7 @@ class DownloaderService {
       const message =
         err?.name === 'AbortError'
           ? 'Downloader request timed out'
-          : err?.message || 'Downloader request failed';
+          : 'Could not reach the configured Cobalt instance. Keep Cobalt and its tunnel running.';
       return { ok: false, source: 'downloader', error: message };
     } finally {
       clearTimeout(timeout);

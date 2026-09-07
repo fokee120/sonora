@@ -227,6 +227,7 @@ export class OfflineManager {
       }
 
       // Combine into Blob
+      if (receivedBytes === 0) throw new Error('The audio provider returned an empty file.');
       const combinedBlob = new Blob(chunks, { type: mimeType });
       controller.signal.throwIfAborted();
 
