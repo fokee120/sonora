@@ -36,18 +36,24 @@ interface CobaltResponse {
   tunnel?: string[];
 }
 
+// Cobalt does not accept m4a. Migrate legacy settings to playable MP3.
+export function normalizeDownloaderFormat(value: unknown): DownloaderConfig['audioFormat'] {
+  return value === 'best' || value === 'opus' ? value : 'mp3';
+}
+
 class DownloaderService {
   private config: DownloaderConfig;
 
   constructor() {
     this.config = {
-      enabled: Boolean(process.env.COBALT_API_URL || process.env.YT_DOWNLOADER_URL),
+      enabled: Boolean(process.env.COBALT_API_URL || process.env.YT_DOWNLOADER_URL || process.env.YTMUSIC_DOWNLOADER_URL),
       url:
         process.env.COBALT_API_URL ||
         process.env.YT_DOWNLOADER_URL ||
+        process.env.YTMUSIC_DOWNLOADER_URL ||
         '',
-      apiKey: process.env.COBALT_API_KEY || '',
-      audioFormat: (process.env.YT_DOWNLOADER_AUDIO_FORMAT as DownloaderConfig['audioFormat']) || 'm4a',
+      apiKey: process.env.COBALT_API_KEY || process.env.YTMUSIC_DOWNLOADER_API_KEY || '',
+      audioFormat: normalizeDownloaderFormat(process.env.YT_DOWNLOADER_AUDIO_FORMAT || process.env.YTMUSIC_AUDIO_FORMAT),
     };
   }
 
@@ -65,7 +71,7 @@ class DownloaderService {
       patch.audioFormat === 'mp3' ||
       patch.audioFormat === 'opus'
     ) {
-      this.config.audioFormat = patch.audioFormat;
+      this.config.audioFormat = normalizeDownloaderFormat(patch.audioFormat);
     }
     return this.getConfig();
   }

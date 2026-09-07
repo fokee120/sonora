@@ -17,7 +17,6 @@ import {
 } from '../../lib/ytmusic/youtubeMusic.js';
 
 const FORMAT_OPTIONS = [
-  { value: 'm4a', label: 'M4A / AAC (default, fastest)' },
   { value: 'mp3', label: 'MP3 (widely compatible)' },
   { value: 'opus', label: 'Opus (smallest size)' },
   { value: 'best', label: 'Best available' },
@@ -27,7 +26,7 @@ export const YoutubeMusicCard: React.FC = () => {
   const [status, setStatus] = useState<YtmStatus | null>(null);
   const [downloaderUrl, setDownloaderUrl] = useState('');
   const [downloaderKey, setDownloaderKey] = useState('');
-  const [audioFormat, setAudioFormat] = useState('m4a');
+  const [audioFormat, setAudioFormat] = useState('mp3');
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -39,7 +38,7 @@ export const YoutubeMusicCard: React.FC = () => {
     if (s) {
       setStatus(s);
       setDownloaderUrl(s.downloader.url || '');
-      setAudioFormat(s.downloader.audioFormat || 'm4a');
+      setAudioFormat(s.downloader.audioFormat === 'm4a' ? 'mp3' : s.downloader.audioFormat || 'mp3');
     }
     setIsRefreshing(false);
   };
@@ -48,47 +47,39 @@ export const YoutubeMusicCard: React.FC = () => {
     void loadStatus();
   }, []);
 
+  const saveCurrentConfig = () => saveDownloaderConfig({
+    enabled: Boolean(downloaderUrl.trim()),
+    url: downloaderUrl.trim(),
+    apiKey: downloaderKey.trim() || undefined,
+    audioFormat,
+  });
+
   const handleTest = async () => {
-    // Save first so the server tests the current values, then run the probe.
     setIsTesting(true);
     setMessage(null);
-    await saveDownloaderConfig({
-      enabled: Boolean(downloaderUrl.trim()),
-      url: downloaderUrl.trim(),
-      apiKey: downloaderKey.trim() || undefined,
-      audioFormat,
-    });
-    const result = await testDownloader();
-    if (result) {
+    try {
+      await saveCurrentConfig();
+      const result = await testDownloader();
       setMessage({ type: result.ok ? 'ok' : 'error', text: result.message });
-      await loadStatus();
-    } else {
-      setMessage({ type: 'error', text: 'Could not reach the server to run the test.' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Downloader test failed.' });
+    } finally {
+      setIsTesting(false);
     }
-    setIsTesting(false);
   };
 
   const handleSave = async () => {
     setIsSaving(true);
     setMessage(null);
-    const result = await saveDownloaderConfig({
-      enabled: Boolean(downloaderUrl.trim()),
-      url: downloaderUrl.trim(),
-      apiKey: downloaderKey.trim() || undefined,
-      audioFormat,
-    });
-    if (result) {
-      setMessage({
-        type: 'ok',
-        text: result.configured
-          ? 'Downloader saved. YouTube Music downloads will use this instance (with automatic fallback).'
-          : 'Saved. No downloader configured — downloads fall back to the built-in stream resolver.',
-      });
-      await loadStatus();
-    } else {
-      setMessage({ type: 'error', text: 'Could not reach the server to save the downloader config.' });
+    try {
+      const result = await saveCurrentConfig();
+      setStatus(previous => ({ searchAvailable: previous?.searchAvailable ?? true, downloader: result }));
+      setMessage({ type: 'ok', text: 'Saved for this server instance. On Vercel, use COBALT_API_URL in project environment variables and redeploy to keep this setting across restarts.' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Could not save downloader settings.' });
+    } finally {
+      setIsSaving(false);
     }
-    setIsSaving(false);
   };
 
   const configured = status?.downloader.configured ?? false;
@@ -200,7 +191,7 @@ export const YoutubeMusicCard: React.FC = () => {
         <div className="flex flex-wrap items-center gap-3">
           <button
             onClick={handleSave}
-            disabled={isSaving}
+            disabled={isSaving || isTesting}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-semibold shadow-lg shadow-red-600/20 transition active:scale-95 disabled:opacity-50"
           >
             {isSaving ? (
@@ -213,7 +204,7 @@ export const YoutubeMusicCard: React.FC = () => {
 
           <button
             onClick={handleTest}
-            disabled={isTesting}
+            disabled={isSaving || isTesting}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-xs font-semibold border border-zinc-700 transition active:scale-95 disabled:opacity-50"
           >
             {isTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <PlugZap className="w-3.5 h-3.5" />}

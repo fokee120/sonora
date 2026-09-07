@@ -1,3 +1,5 @@
+import { downloaderService } from '../../src/server/ytmusic/DownloaderService.js';
+
 type ApiRequest = {
   method?: string;
 };
@@ -20,9 +22,10 @@ export default function handler(req: ApiRequest, res: ApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const downloaderUrl = normalizeUrl(process.env.COBALT_API_URL || process.env.YTMUSIC_DOWNLOADER_URL);
-  const apiKey = process.env.COBALT_API_KEY || process.env.YTMUSIC_DOWNLOADER_API_KEY || '';
-  const audioFormat = process.env.YTMUSIC_AUDIO_FORMAT || 'm4a';
+  const config = downloaderService.getConfig();
+  const downloaderUrl = normalizeUrl(config.url);
+  const apiKey = config.apiKey;
+  const audioFormat = config.audioFormat;
 
   return res.status(200).json({
     searchAvailable: true,

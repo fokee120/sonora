@@ -5,7 +5,7 @@ const { default: app } = await import('../server.js');
 const { downloaderService } = await import('../src/server/ytmusic/DownloaderService.js');
 test('native stream uses configured downloader and forwards ranges; rejects HTML', async () => {
   const originalFetch = globalThis.fetch;
-  downloaderService.setConfig({ enabled: true, url: 'https://audio-provider.test', audioFormat: 'mp3' });
+  downloaderService.setConfig({ enabled: true, url: 'https://audio-provider.test', audioFormat: 'm4a' });
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>(resolve => server.once('listening', resolve));
   const address = server.address() as { port: number };
@@ -13,6 +13,7 @@ test('native stream uses configured downloader and forwards ranges; rejects HTML
   globalThis.fetch = (async (url: any, options: any) => {
     if (String(url) === 'https://audio-provider.test') {
       assert.equal(JSON.parse(options.body).downloadMode, 'audio');
+      assert.equal(JSON.parse(options.body).audioFormat, 'mp3');
       return Response.json({ status: 'tunnel', url: 'https://media.test/audio' });
     }
     assert.equal(String(url), 'https://media.test/audio');

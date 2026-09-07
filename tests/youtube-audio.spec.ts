@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+test.use({ serviceWorkers: 'block' });
 function wav(seconds = 4): Buffer {
   const sampleRate = 8000;
   const dataSize = sampleRate * seconds * 2;
@@ -39,6 +40,7 @@ for (const failure of [false, true]) {
       return route.fulfill({ json: path === '/api/auth/session' ? { user: null, isAuthenticated: false, authRequired: false, authorizedEmails: [] } : { tracks: [], albums: [], artists: [] } });
     });
     await page.goto('/');
+    await page.waitForLoadState('networkidle');
     await page.evaluate(async track => {
       const path = '/src/lib/audio/PlayerEngine.ts';
       await (await import(path)).playerEngine.playTrack(track);
@@ -62,3 +64,15 @@ for (const failure of [false, true]) {
     }
   });
 }
+
+test('downloader reports HTTP failure instead of a generic connection error', async ({ page }) => {
+  await page.route('**/api/**', route => route.fulfill({ status: 404, contentType: 'text/plain', body: 'NOT_FOUND' }));
+  await page.goto('/');
+    await page.waitForLoadState('networkidle');
+  const message = await page.evaluate(async () => {
+    const path = '/src/lib/ytmusic/youtubeMusic.ts';
+    try { await (await import(path)).testDownloader(); return ''; }
+    catch (error) { return (error as Error).message; }
+  });
+  expect(message).toContain('HTTP 404');
+});

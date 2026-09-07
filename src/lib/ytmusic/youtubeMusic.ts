@@ -98,24 +98,36 @@ export async function fetchYoutubeMusicStatus(signal?: AbortSignal): Promise<Ytm
   }
 }
 
+async function downloaderRequest(path: string, body?: unknown): Promise<any> {
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  } catch {
+    throw new Error('Could not connect to Sonora. Check your connection and try again.');
+  }
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = data?.details || data?.error;
+    throw new Error(typeof detail === 'string' ? detail :
+      'Sonora downloader API returned HTTP ' + response.status + '. Check the deployment API routes and function logs.');
+  }
+  if (!data) throw new Error('Sonora returned a page instead of downloader JSON. Check the deployment API routes.');
+  return data;
+}
+
 export async function saveDownloaderConfig(config: {
   enabled?: boolean;
   url?: string;
   apiKey?: string;
   audioFormat?: string;
-}): Promise<YtmStatus['downloader'] | null> {
-  try {
-    const res = await fetch('/api/ytmusic/downloader-config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data?.downloader ?? null;
-  } catch {
-    return null;
-  }
+}): Promise<YtmStatus['downloader']> {
+  const data = await downloaderRequest('/api/ytmusic/downloader-config', config);
+  if (!data.downloader) throw new Error('Sonora returned an invalid downloader configuration response.');
+  return data.downloader;
 }
 
 export interface DownloaderTestResult {
@@ -123,12 +135,10 @@ export interface DownloaderTestResult {
   message: string;
 }
 
-export async function testDownloader(): Promise<DownloaderTestResult | null> {
-  try {
-    const res = await fetch('/api/ytmusic/downloader-test', { method: 'POST' });
-    if (!res.ok) return null;
-    return (await res.json()) as DownloaderTestResult;
-  } catch {
-    return null;
+export async function testDownloader(): Promise<DownloaderTestResult> {
+  const data = await downloaderRequest('/api/ytmusic/downloader-test');
+  if (typeof data.ok !== 'boolean' || typeof data.message !== 'string') {
+    throw new Error('Sonora returned an invalid downloader test response.');
   }
+  return data;
 }

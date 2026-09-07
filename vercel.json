@@ -3,5 +3,27 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "cleanUrls": true
+  "cleanUrls": true,
+  "rewrites": [
+    {
+      "source": "/api/ytmusic/downloader-config/:path*",
+      "destination": "/api"
+    },
+    {
+      "source": "/api/ytmusic/downloader-test/:path*",
+      "destination": "/api"
+    },
+    {
+      "source": "/api/ytmusic/stream/:path*",
+      "destination": "/api"
+    },
+    {
+      "source": "/api/ytmusic/download/:path*",
+      "destination": "/api"
+    },
+    {
+      "source": "/api/ytmusic/track/:path*",
+      "destination": "/api"
+    }
+  ]
 }
