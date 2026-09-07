@@ -2,7 +2,7 @@ import { Track, Album, Playlist, DownloadState, StorageQuotaInfo } from '../../t
 import { dbService } from '../db.js';
 import { IAudioStorage } from './IAudioStorage.js';
 import { IndexedDBAudioStorage } from './IndexedDBAudioStorage.js';
-import { getDriveAccessToken } from '../googleAuth.js';
+import { fetchTrackAudio } from '../audio/audioSource.js';
 
 type Listener = () => void;
 
@@ -122,7 +122,7 @@ export class OfflineManager {
   public async downloadTrack(track: Track): Promise<void> {
     // If already downloaded or in progress, return
     const current = this.downloadsCache.get(track.id);
-    if (current?.status === 'completed' || current?.status === 'downloading') {
+    if (current?.status === 'completed' || current?.status === 'downloading' || current?.status === 'queued') {
       return;
     }
 
@@ -188,30 +188,8 @@ export class OfflineManager {
     try {
       await updateState({ status: 'downloading', progress: 5 });
 
-      // Step 1: Request signed stream URL from API
-      const driveToken = getDriveAccessToken();
-      const queryParam = driveToken ? `?token=${encodeURIComponent(driveToken)}` : '';
-      const res = await fetch(`/api/tracks/${track.id}/stream-url${queryParam}`, {
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        throw new Error(`Failed to obtain signed URL (${res.status})`);
-      }
-
-      const { streamUrl } = await res.json();
-      if (!streamUrl) {
-        throw new Error('No stream URL received');
-      }
-
-      // Step 2: Fetch audio in browser with progress tracking
-      const audioRes = await fetch(streamUrl, {
-        signal: controller.signal,
-      });
-
-      if (!audioRes.ok) {
-        throw new Error(`Failed to fetch audio stream (${audioRes.status})`);
-      }
+      const audioRes = await fetchTrackAudio(track, controller.signal);
+      const mimeType = audioRes.headers.get('content-type') || 'application/octet-stream';
 
       const contentLength = audioRes.headers.get('content-length');
       const totalBytes = contentLength ? parseInt(contentLength, 10) : track.sizeBytes || 4000000;
@@ -249,10 +227,11 @@ export class OfflineManager {
       }
 
       // Combine into Blob
-      const combinedBlob = new Blob(chunks, { type: 'audio/mpeg' });
+      const combinedBlob = new Blob(chunks, { type: mimeType });
+      controller.signal.throwIfAborted();
 
       // Step 3: Store raw binary Blob inside IndexedDB
-      await this.audioStorage.save(track.id, combinedBlob, 'audio/mpeg');
+      await this.audioStorage.save(track.id, combinedBlob, mimeType);
 
       // Step 4: Finalize metadata
       await updateState({

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 type ApiRequest = {
   method?: string;
   headers: Record<string, string | string[] | undefined>;
@@ -40,11 +42,11 @@ function detectFormat(filename: string, mimeType?: string): string {
 
 function parseFilename(filename: string) {
   const cleanName = filename.replace(AUDIO_EXTENSIONS, '').trim();
-  const matchArtistTitle = cleanName.match(/^(.+?)\s*[-–—]\s*(.+)$/);
+  const matchArtistTitle = cleanName.match(/^(.+)\s+[-–—]\s+(.+)$/);
   if (matchArtistTitle) {
     return {
-      artist: matchArtistTitle[1].trim() || 'Unknown Artist',
-      title: matchArtistTitle[2].trim() || cleanName,
+      artist: matchArtistTitle[2].trim() || 'Unknown Artist',
+      title: matchArtistTitle[1].trim() || cleanName,
       album: 'Google Drive Audio',
     };
   }
@@ -57,11 +59,11 @@ function parseFilename(filename: string) {
 }
 
 function makeAlbumId(title: string, artist: string) {
-  return `gdrive-album-${Buffer.from(`${title}:${artist}`).toString('base64url').slice(0, 24)}`;
+  return `gdrive-album-${createHash('sha256').update(`${title}:${artist}`).digest('hex').slice(0, 24)}`;
 }
 
 function makeArtistId(name: string) {
-  return `gdrive-artist-${Buffer.from(name).toString('base64url').slice(0, 24)}`;
+  return `gdrive-artist-${createHash('sha256').update(name).digest('hex').slice(0, 24)}`;
 }
 
 async function listDriveFiles(accessToken: string, folderId?: string): Promise<DriveFile[]> {
@@ -130,7 +132,8 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
         albumArtist: parsed.artist,
         trackNumber: index + 1,
         discNumber: 1,
-        duration: 180,
+        duration: 0,
+        metadataKey: `${file.modifiedTime || ''}:${file.size || ''}`,
         artworkUrl: file.thumbnailLink || undefined,
         cloudKey: `gdrive://${file.id}/${encodeURIComponent(file.name || 'audio')}`,
         sizeBytes: Number(file.size || 0),

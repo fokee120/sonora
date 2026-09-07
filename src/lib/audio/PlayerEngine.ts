@@ -1,7 +1,7 @@
 import { Track, PlayerState, RepeatMode, QueueItem } from '../../types/index.js';
 import { offlineManager } from '../offline/OfflineManager.js';
 import { dbService } from '../db.js';
-import { getDriveAccessToken } from '../googleAuth.js';
+import { cloudStreamUrl, fetchDriveAudio, isDriveTrack } from './audioSource.js';
 
 type StateListener = (state: PlayerState) => void;
 type QueueListener = (queue: QueueItem[]) => void;
@@ -10,6 +10,7 @@ export class PlayerEngine {
   private static instance: PlayerEngine;
   private audio: HTMLAudioElement;
   private currentObjectUrl: string | null = null;
+  private loadController: AbortController | null = null;
   private stateListeners: Set<StateListener> = new Set();
   private queueListeners: Set<QueueListener> = new Set();
 
@@ -117,11 +118,12 @@ export class PlayerEngine {
     });
 
     this.audio.addEventListener('loadedmetadata', () => {
-      this.state.duration = this.audio.duration;
+      this.recordDuration();
       this.state.isLoading = false;
       this.updateMediaSessionPosition();
       this.notifyState();
     });
+    this.audio.addEventListener('durationchange', () => this.recordDuration());
 
     this.audio.addEventListener('ended', () => {
       this.handleTrackEnded();
@@ -131,6 +133,18 @@ export class PlayerEngine {
       console.warn('Audio element playback error:', e);
       this.handlePlaybackError();
     });
+  }
+
+  private recordDuration(): void {
+    const duration = this.audio.duration;
+    if (!Number.isFinite(duration) || duration <= 0) return;
+    this.state.duration = duration;
+    const track = this.state.currentTrack;
+    if (track && Math.abs(track.duration - duration) > 0.01) {
+      this.state.currentTrack = { ...track, duration };
+      window.dispatchEvent(new CustomEvent('track-duration', { detail: { track, duration } }));
+    }
+    this.notifyState();
   }
 
   private setupMediaSession(): void {
@@ -222,6 +236,12 @@ export class PlayerEngine {
    * Load and play a specific track
    */
   public async playTrack(track: Track, newQueue?: Track[]): Promise<void> {
+    this.loadController?.abort();
+    const controller = new AbortController();
+    this.loadController = controller;
+    this.audio.pause();
+    this.audio.removeAttribute('src');
+    this.audio.load();
     if (newQueue && newQueue.length > 0) {
       this.setQueue(newQueue, track);
     } else if (this.queue.length === 0) {
@@ -231,6 +251,9 @@ export class PlayerEngine {
     this.state.currentTrack = track;
     this.state.isLoading = true;
     this.state.currentTime = 0;
+    this.state.duration = track.duration || 0;
+    this.state.bufferedTime = 0;
+    this.state.error = null;
     this.retryCount = 0;
     this.notifyState();
 
@@ -251,6 +274,7 @@ export class PlayerEngine {
       const isDownloaded = offlineManager.isTrackDownloaded(track.id);
       if (isDownloaded) {
         const localBlob = await offlineManager.audioStorage.get(track.id);
+        controller.signal.throwIfAborted();
         if (localBlob) {
           const objectUrl = URL.createObjectURL(localBlob);
           this.currentObjectUrl = objectUrl;
@@ -267,27 +291,28 @@ export class PlayerEngine {
         throw new Error('This track is not downloaded for offline playback.');
       }
 
-      // Stream from cloud or Google Drive signed/proxied URL
       this.state.playbackSource = 'cloud';
-      const driveToken = getDriveAccessToken();
-      const queryParam = driveToken ? `?token=${encodeURIComponent(driveToken)}` : '';
-      const res = await fetch(`/api/tracks/${track.id}/stream-url${queryParam}`);
-      if (!res.ok) {
-        throw new Error(`Failed to obtain audio stream (${res.status})`);
+      if (isDriveTrack(track)) {
+        const response = await fetchDriveAudio(track, { signal: controller.signal });
+        const blob = await response.blob();
+        controller.signal.throwIfAborted();
+        this.currentObjectUrl = URL.createObjectURL(blob);
+        this.audio.src = this.currentObjectUrl;
+      } else {
+        const streamUrl = await cloudStreamUrl(track, controller.signal);
+        controller.signal.throwIfAborted();
+        this.audio.src = streamUrl;
       }
-
-      const { streamUrl } = await res.json();
-      if (!streamUrl) {
-        throw new Error('No audio URL returned');
-      }
-
-      this.audio.src = streamUrl;
       await this.audio.play();
       this.notifyState();
     } catch (err: any) {
+      if (controller.signal.aborted) return;
       console.error('Error starting playback:', err);
       this.state.isLoading = false;
       this.state.isPlaying = false;
+      this.state.error = err.name === 'NotAllowedError'
+        ? 'Audio is ready. Press Play to start.'
+        : err.message || 'This audio file could not be played.';
       this.notifyState();
     }
   }
@@ -295,6 +320,13 @@ export class PlayerEngine {
   private async handlePlaybackError(): Promise<void> {
     const track = this.state.currentTrack;
     if (!track) return;
+    if (isDriveTrack(track)) {
+      this.state.isLoading = false;
+      this.state.isPlaying = false;
+      this.state.error = 'This browser could not play the audio file. Try another browser or an MP3 version.';
+      this.notifyState();
+      return;
+    }
 
     // Retry once with a fresh signed URL if online
     if (navigator.onLine && this.retryCount === 0 && this.state.playbackSource === 'cloud') {
@@ -327,11 +359,18 @@ export class PlayerEngine {
   }
 
   public async play(): Promise<void> {
+    this.state.error = null;
     if (this.state.currentTrack) {
       if (!this.audio.src) {
         await this.playTrack(this.state.currentTrack);
       } else {
-        await this.audio.play();
+        try {
+          await this.audio.play();
+        } catch (err: any) {
+          this.state.error = err.message || 'Playback could not start.';
+          this.state.isLoading = false;
+          this.notifyState();
+        }
       }
     } else if (this.queue.length > 0) {
       await this.playTrack(this.queue[0].track);

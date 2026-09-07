@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import {
   Track,
   Album,
@@ -12,6 +12,8 @@ import { dbService } from '../lib/db.js';
 import { offlineManager } from '../lib/offline/OfflineManager.js';
 import { useNetworkState } from '../hooks/useNetworkState.js';
 import { User } from 'firebase/auth';
+import { readDriveDuration } from '../lib/audio/driveMetadata.js';
+import { responseError } from '../lib/audio/audioSource.js';
 import {
   initGoogleAuth,
   getDriveAccessToken,
@@ -128,6 +130,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [driveUser, setDriveUser] = useState<User | null>(null);
   const [isDriveConnected, setIsDriveConnected] = useState<boolean>(false);
   const [isScanningDrive, setIsScanningDrive] = useState<boolean>(false);
+  const driveScanController = useRef<AbortController | null>(null);
+
+  const saveDuration = useCallback(async (track: Track, duration: number) => {
+    if (!Number.isFinite(duration) || duration <= 0) return;
+    const updated = { ...track, duration };
+    setTracks(previous => previous.map(item => item.id === track.id ? { ...item, duration } : item));
+    setAlbums(previous => previous.map(album => {
+      if (!album.tracks?.some(item => item.id === track.id)) return album;
+      const albumTracks = album.tracks.map(item => item.id === track.id ? { ...item, duration } : item);
+      return { ...album, tracks: albumTracks, duration: albumTracks.reduce((total, item) => total + item.duration, 0) };
+    }));
+    try {
+      await dbService.saveTracks([updated]);
+      await dbService.setSetting(`duration:${track.id}`, { key: track.metadataKey, duration });
+    } catch (err) {
+      console.warn('Could not cache track duration:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onDuration = (event: Event) => {
+      const { track, duration } = (event as CustomEvent<{ track: Track; duration: number }>).detail;
+      void saveDuration(track, duration);
+    };
+    window.addEventListener('track-duration', onDuration);
+    return () => window.removeEventListener('track-duration', onDuration);
+  }, [saveDuration]);
+
+  useEffect(() => () => driveScanController.current?.abort(), []);
 
   // Playlist Modal Controls
   const [isCreatePlaylistOpen, setIsCreatePlaylistOpen] = useState<boolean>(false);
@@ -198,7 +229,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setLibraryError(null);
 
     // Try fetching from API when online
-    if (navigator.onLine) {
+    if (navigator.onLine && !getDriveAccessToken()) {
       try {
         const token = localStorage.getItem('music_auth_token');
         const res = await fetch('/api/library', {
@@ -207,6 +238,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         if (res.ok) {
           const data = await res.json();
+          if (getDriveAccessToken()) return;
           setTracks(data.tracks || []);
           setAlbums(data.albums || []);
           setArtists(data.artists || []);
@@ -287,6 +319,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Scan Google Drive audio files and extract metadata (using server-side or client token)
   const scanGoogleDrive = useCallback(async (folderId?: string) => {
     const token = getDriveAccessToken();
+    driveScanController.current?.abort();
+    const controller = new AbortController();
+    driveScanController.current = controller;
 
     setIsScanningDrive(true);
     setLibraryError(null);
@@ -301,6 +336,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const res = await fetch('/api/drive/scan', {
         method: 'POST',
+        signal: controller.signal,
         headers,
         body: JSON.stringify({
           accessToken: token && token !== 'server-active-token' ? token : undefined,
@@ -309,15 +345,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       if (!res.ok) {
-        const err = await res.json();
         if (res.status === 401) {
           setIsDriveConnected(false);
           setDriveUser(null);
         }
-        throw new Error(err.error || 'Failed to scan Google Drive');
+        throw await responseError(res, 'Failed to scan Google Drive');
       }
 
       const data = await res.json();
+      const scannedTracks: Track[] = data.tracks || [];
+      for (const track of scannedTracks) {
+        const cached = await dbService.getSetting<{ key?: string; duration: number } | null>(`duration:${track.id}`, null);
+        if (cached && cached.key === track.metadataKey) track.duration = cached.duration;
+      }
+      controller.signal.throwIfAborted();
+      const byId = new Map(scannedTracks.map(track => [track.id, track]));
+      data.albums = (data.albums || []).map((album: Album) => {
+        const albumTracks = (album.tracks || []).map(track => byId.get(track.id) || track);
+        return { ...album, tracks: albumTracks, duration: albumTracks.reduce((sum, track) => sum + track.duration, 0) };
+      });
       setTracks(data.tracks || []);
       setAlbums(data.albums || []);
       setArtists(data.artists || []);
@@ -327,6 +373,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await dbService.saveTracks(data.tracks);
         await dbService.saveAlbums(data.albums || []);
         await dbService.saveArtists(data.artists || []);
+        // Limit parallel range reads so indexing stays responsive during playback.
+        const pending = scannedTracks.filter(track => !track.duration);
+        const worker = async () => {
+          while (pending.length && !controller.signal.aborted) {
+            const track = pending.shift()!;
+            try {
+              const duration = await readDriveDuration(track, controller.signal);
+              if (!controller.signal.aborted) await saveDuration(track, duration);
+            } catch (err) {
+              if (!controller.signal.aborted) console.warn('Could not read audio duration:', track.id, err);
+            }
+          }
+        };
+        void Promise.all([worker(), worker()]);
       } else if (data.debug) {
         const sampleNames = (data.debug.sampleFiles || [])
           .map((file: { name: string }) => file.name)
@@ -338,12 +398,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         );
       }
     } catch (err: any) {
+      if (controller.signal.aborted) return;
       console.error('Failed scanning Google Drive:', err);
       setLibraryError(err.message || 'Failed scanning Google Drive');
     } finally {
-      setIsScanningDrive(false);
+      if (driveScanController.current === controller) setIsScanningDrive(false);
     }
-  }, []);
+  }, [saveDuration]);
 
   // Google Drive Auth listener & Server-side session verification
   useEffect(() => {

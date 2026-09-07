@@ -41,6 +41,7 @@ export const BottomPlayer: React.FC = () => {
     cycleRepeatMode,
     playbackSource,
     isLoading,
+    error,
   } = usePlayer();
 
   const { isFavorite, toggleFavorite } = useApp();
@@ -67,6 +68,7 @@ export const BottomPlayer: React.FC = () => {
         id="bottom-player-bar"
         className="fixed bottom-14 md:bottom-0 left-0 right-0 z-40 bg-black/80 backdrop-blur-xl border-t border-white/5 select-none shadow-2xl transition"
       >
+        {error && <p role="alert" className="px-4 py-2 text-xs text-rose-300 bg-rose-950/80 break-words">{error}</p>}
         {/* Scrubber Progress Bar at top edge with Atmospheric Blue Accent */}
         <div
           className="relative w-full h-1 bg-white/10 cursor-pointer group hover:h-2 transition-all"

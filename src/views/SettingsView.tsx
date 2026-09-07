@@ -51,6 +51,7 @@ export const SettingsView: React.FC = () => {
   const [copiedCli, setCopiedCli] = useState(false);
   const [copiedEnv, setCopiedEnv] = useState(false);
   const [isPersisting, setIsPersisting] = useState(false);
+  const [persistMessage, setPersistMessage] = useState<string | null>(null);
   const [isRescanning, setIsRescanning] = useState(false);
   const [rescanSuccessMessage, setRescanSuccessMessage] = useState<string | null>(null);
 
@@ -120,8 +121,21 @@ AUTH_SECRET="your_custom_secret_key_phrase"`;
 
   const handlePersist = async () => {
     setIsPersisting(true);
-    await requestPersistStorage();
-    setIsPersisting(false);
+    setPersistMessage(null);
+    try {
+      if (!navigator.storage?.persist) {
+        setPersistMessage('This browser does not support storage protection requests. Downloads are still available.');
+        return;
+      }
+      const granted = await requestPersistStorage();
+      setPersistMessage(granted
+        ? 'Storage protection is enabled on this device.'
+        : 'The browser did not grant protection. Downloads still work, but the browser may remove them when space is low.');
+    } catch {
+      setPersistMessage('Could not request storage protection. Please try again.');
+    } finally {
+      setIsPersisting(false);
+    }
   };
 
   const formatLastScan = (isoString?: string | null) => {
@@ -344,16 +358,16 @@ AUTH_SECRET="your_custom_secret_key_phrase"`;
                 Storage Eviction Protection
               </span>
               <div className="flex items-center gap-2">
-                {storageInfo.isPersisted ? (
+                {storageInfo.persisted ? (
                   <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                 ) : (
                   <AlertCircle className="w-4 h-4 text-amber-400" />
                 )}
                 <span className="text-xs font-semibold text-zinc-200">
-                  {storageInfo.isPersisted ? 'Storage is Persistent' : 'Storage is Best-Effort'}
+                  {storageInfo.persisted ? 'Storage is Persistent' : 'Storage is Best-Effort'}
                 </span>
               </div>
-              {!storageInfo.isPersisted && (
+              {!storageInfo.persisted && (
                 <button
                   onClick={handlePersist}
                   disabled={isPersisting}
@@ -362,6 +376,7 @@ AUTH_SECRET="your_custom_secret_key_phrase"`;
                   {isPersisting ? 'Requesting...' : 'Request Persistent Storage'}
                 </button>
               )}
+              {persistMessage && <p role="status" className="text-xs text-zinc-300">{persistMessage}</p>}
             </div>
           </div>
         )}

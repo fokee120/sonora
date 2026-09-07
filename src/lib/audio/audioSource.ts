@@ -1,0 +1,55 @@
+import type { Track } from '../../types/index.js';
+import { getDriveAccessToken } from '../googleAuth.js';
+
+export function isDriveTrack(track: Track): boolean {
+  return track.id.startsWith('gdrive:') || track.cloudKey.startsWith('gdrive://');
+}
+
+export function driveMediaUrl(track: Track): string {
+  const fileId = track.id.startsWith('gdrive:')
+    ? track.id.slice(7)
+    : track.cloudKey.slice(9).split('/')[0];
+  if (!/^[\w-]+$/.test(fileId)) throw new Error('Invalid Google Drive file ID. Rescan your library.');
+  return `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`;
+}
+
+export async function responseError(response: Response, fallback: string): Promise<Error> {
+  if (response.status === 401) return new Error('Google Drive authorization expired. Disconnect and sign in with Google again.');
+  let detail = '';
+  try {
+    const data = await response.json();
+    detail = typeof data.error === 'string' ? data.error : data.error?.message || '';
+  } catch {
+    // Vercel errors can be plain text rather than JSON.
+  }
+  return new Error(`${fallback} (${response.status})${detail ? `: ${detail}` : ''}`);
+}
+
+export async function fetchDriveAudio(track: Track, options: RequestInit = {}): Promise<Response> {
+  const token = getDriveAccessToken();
+  if (!token || token === 'server-active-token') {
+    throw new Error('Connect Google Drive on this device before playing or downloading.');
+  }
+  const headers = new Headers(options.headers);
+  headers.set('Authorization', `Bearer ${token}`);
+  const response = await fetch(driveMediaUrl(track), {
+    ...options, headers, credentials: 'omit', cache: 'no-store',
+  });
+  if (!response.ok) throw await responseError(response, 'Google Drive could not read this audio file');
+  return response;
+}
+
+export async function cloudStreamUrl(track: Track, signal?: AbortSignal): Promise<string> {
+  const response = await fetch(`/api/tracks/${encodeURIComponent(track.id)}/stream-url`, { signal });
+  if (!response.ok) throw await responseError(response, 'Could not obtain audio');
+  const data = await response.json();
+  if (!data.streamUrl) throw new Error('No audio URL returned.');
+  return data.streamUrl;
+}
+
+export async function fetchTrackAudio(track: Track, signal?: AbortSignal): Promise<Response> {
+  if (isDriveTrack(track)) return fetchDriveAudio(track, { signal });
+  const response = await fetch(await cloudStreamUrl(track, signal), { signal });
+  if (!response.ok) throw await responseError(response, 'Could not download audio');
+  return response;
+}

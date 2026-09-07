@@ -19,6 +19,7 @@ export function usePlayer() {
     ...state,
     queue,
     playTrack: (track: Track, tracksQueue?: Track[]) => playerEngine.playTrack(track, tracksQueue),
+    setQueue: (tracks: Track[], activeTrack?: Track) => playerEngine.setQueue(tracks, activeTrack),
     play: () => playerEngine.play(),
     pause: () => playerEngine.pause(),
     togglePlay: () => playerEngine.togglePlay(),

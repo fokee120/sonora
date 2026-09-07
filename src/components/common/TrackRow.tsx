@@ -72,7 +72,7 @@ export const TrackRow: React.FC<TrackRowProps> = ({
   };
 
   const formatDuration = (seconds: number) => {
-    if (!seconds || isNaN(seconds)) return '0:00';
+    if (!seconds || !Number.isFinite(seconds)) return '--:--';
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
@@ -155,6 +155,11 @@ export const TrackRow: React.FC<TrackRowProps> = ({
             <span className="text-zinc-600 hidden md:inline"> • {track.album}</span>
           )}
         </p>
+        {downloadState?.status === 'failed' && (
+          <p role="alert" className="text-xs text-rose-300 mt-1 break-words">
+            {downloadState.error || 'Download failed. Please try again.'}
+          </p>
+        )}
       </div>
 
       {/* Album name column (desktop) */}
@@ -189,7 +194,7 @@ export const TrackRow: React.FC<TrackRowProps> = ({
             className={`p-1.5 text-zinc-500 hover:text-white rounded-lg transition ${
               !isOnline ? 'opacity-30 cursor-not-allowed' : 'opacity-0 group-hover:opacity-100'
             }`}
-            title={isOnline ? 'Download for offline playback' : 'Connect online to download'}
+            title={isOnline ? (downloadState?.status === 'failed' ? 'Retry download' : 'Download for offline playback') : 'Connect online to download'}
           >
             <Download className="w-4 h-4" />
           </button>

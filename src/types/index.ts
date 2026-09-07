@@ -7,6 +7,7 @@ export interface Track {
   trackNumber?: number;
   discNumber?: number;
   duration: number; // in seconds
+  metadataKey?: string;
   year?: number;
   genre?: string;
   artworkUrl?: string;
@@ -92,6 +93,7 @@ export interface PlayerState {
   duration: number;
   bufferedTime: number;
   isLoading: boolean;
+  error?: string | null;
 }
 
 export interface StorageQuotaInfo {
