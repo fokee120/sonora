@@ -66,7 +66,7 @@ export const BottomPlayer: React.FC = () => {
     <>
       <div
         id="bottom-player-bar"
-        className="fixed bottom-14 md:bottom-0 left-0 right-0 z-40 bg-black/80 backdrop-blur-xl border-t border-white/5 select-none shadow-2xl transition"
+        className="bottom-player-bar fixed md:bottom-0 left-0 right-0 z-40 bg-black/80 backdrop-blur-xl border-t border-white/5 select-none shadow-2xl transition"
       >
         {error && <p role="alert" className="px-4 py-2 text-xs text-rose-300 bg-rose-950/80 break-words">{error}</p>}
         {/* Scrubber Progress Bar at top edge with Atmospheric Blue Accent */}

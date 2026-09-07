@@ -62,7 +62,7 @@ const MainAppContent: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#050505] text-white antialiased font-sans relative selection:bg-blue-600 selection:text-white">
+    <div className="app-shell flex flex-col w-screen overflow-hidden bg-[#050505] text-white antialiased font-sans relative selection:bg-blue-600 selection:text-white">
       {/* Atmospheric Ambient Glow Layer */}
       <div
         className="absolute inset-0 pointer-events-none z-0"
@@ -141,8 +141,8 @@ const MainAppContent: React.FC = () => {
           {/* Dynamic Center Scroll View */}
           <main
             id="main-content-scroll"
-            className={`flex-1 overflow-y-auto px-4 sm:px-8 py-6 transition-all ${
-              currentTrack ? 'pb-32 md:pb-28' : 'pb-16 md:pb-8'
+            className={`main-scroll flex-1 overflow-y-auto px-4 sm:px-8 transition-all ${
+              currentTrack ? 'pb-with-player md:pb-28' : 'pb-with-nav md:pb-8'
             }`}
           >
             <div className="max-w-7xl mx-auto w-full">{renderCurrentView()}</div>

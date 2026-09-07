@@ -28,7 +28,7 @@ export const MobileNavBar: React.FC = () => {
   return (
     <nav
       id="mobile-bottom-nav"
-      className="md:hidden flex items-center justify-around bg-black/85 backdrop-blur-xl border-t border-white/5 px-2 py-1.5 z-40 shrink-0 select-none pb-safe"
+      className="mobile-bottom-nav md:hidden fixed left-0 right-0 bottom-0 flex items-center justify-around bg-black/85 backdrop-blur-xl border-t border-white/5 px-2 py-1.5 z-40 select-none"
     >
       {items.map((item) => {
         const Icon = item.icon;

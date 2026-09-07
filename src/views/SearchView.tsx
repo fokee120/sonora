@@ -23,7 +23,7 @@ export const SearchView: React.FC = () => {
     clearYtResults,
   } = useApp();
 
-  const [source, setSource] = useState<SearchSource>('vault');
+  const [source, setSource] = useState<SearchSource>('youtube');
   const [query, setQuery] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'songs' | 'albums' | 'artists'>('all');
   const [localYtError, setLocalYtError] = useState<string | null>(null);
@@ -127,17 +127,6 @@ export const SearchView: React.FC = () => {
         {/* Source Toggle */}
         <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-zinc-900/70 border border-zinc-800">
           <button
-            onClick={() => switchSource('vault')}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition ${
-              source === 'vault'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            <Disc3 className="w-3.5 h-3.5" />
-            <span>My Vault</span>
-          </button>
-          <button
             onClick={() => switchSource('youtube')}
             className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition ${
               source === 'youtube'
@@ -147,6 +136,17 @@ export const SearchView: React.FC = () => {
           >
             <Youtube className="w-3.5 h-3.5" />
             <span>YouTube Music</span>
+          </button>
+          <button
+            onClick={() => switchSource('vault')}
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition ${
+              source === 'vault'
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            <Disc3 className="w-3.5 h-3.5" />
+            <span>My Vault</span>
           </button>
         </div>
 
