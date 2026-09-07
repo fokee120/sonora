@@ -37,8 +37,12 @@ async function proxyMediaResponse(
     });
   }
 
-  res.status(upstream.status);
   const contentType = upstream.headers.get('content-type');
+  if (contentType && /text\/|application\/(json|xml)/i.test(contentType)) {
+    await upstream.body?.cancel();
+    throw new Error('Audio provider returned a page or error instead of audio. Check the downloader configuration.');
+  }
+  res.status(upstream.status);
   res.setHeader('Content-Type', contentType && !contentType.includes('text/html') ? contentType : fallbackMime);
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Cache-Control', 'no-store');
@@ -713,31 +717,10 @@ app.get('/api/ytmusic/track/:videoId', async (req, res) => {
   }
 });
 
-// Playback stream proxy (HTTP Range supported for scrubbing)
-app.get('/api/ytmusic/stream/:videoId', async (req, res) => {
-  try {
-    const { videoId } = req.params;
-    if (!VALID_YT_VIDEO_ID.test(videoId)) {
-      return res.status(400).json({ error: 'Invalid YouTube video ID' });
-    }
-
-    const resolved = await youtubeMusicClient.resolveAudioStream(videoId);
-    await proxyMediaResponse(res, resolved.url, req.headers.range, resolved.mimeType);
-  } catch (err: any) {
-    console.error('YT Music stream error:', err);
-    if (!res.headersSent) {
-      res.status(err?.status || 502).json({
-        error: 'Could not stream this track from YouTube Music',
-        details: err?.message,
-      });
-    }
-  }
-});
-
-// Offline download endpoint. Preference order:
+// Native-player streaming and offline downloads share the same resolver. Preference order:
 //   1. Configured third-party downloader (Cobalt-compatible API)
 //   2. Built-in InnerTube audio stream proxy (fallback)
-app.get('/api/ytmusic/download/:videoId', async (req, res) => {
+app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], async (req, res) => {
   try {
     const { videoId } = req.params;
     if (!VALID_YT_VIDEO_ID.test(videoId)) {

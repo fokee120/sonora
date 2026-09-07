@@ -1,8 +1,8 @@
 import { Track, PlayerState, RepeatMode, QueueItem } from '../../types/index.js';
 import { offlineManager } from '../offline/OfflineManager.js';
 import { dbService } from '../db.js';
-import { cloudStreamUrl, fetchDriveAudio, isDriveTrack, youtubeStreamUrl } from './audioSource.js';
-import { isYoutubeTrack, youtubeVideoId } from '../ytmusic/youtubeMusic.js';
+import { cloudStreamUrl, fetchDriveAudio, isDriveTrack, youtubeStreamUrl, youtubePlaybackError } from './audioSource.js';
+import { isYoutubeTrack } from '../ytmusic/youtubeMusic.js';
 
 type StateListener = (state: PlayerState) => void;
 type QueueListener = (queue: QueueItem[]) => void;
@@ -295,7 +295,6 @@ export class PlayerEngine {
       this.state.playbackSource = 'cloud';
       if (isYoutubeTrack(track)) {
         // Streams through the server-side YT Music proxy (Range supported).
-        void youtubeVideoId(track); // validates shape early
         this.audio.src = youtubeStreamUrl(track);
       } else if (isDriveTrack(track)) {
         const response = await fetchDriveAudio(track, { signal: controller.signal });
@@ -312,6 +311,10 @@ export class PlayerEngine {
       this.notifyState();
     } catch (err: any) {
       if (controller.signal.aborted) return;
+      if (isYoutubeTrack(track) && err.name !== 'NotAllowedError') {
+        try { err = await youtubePlaybackError(track, controller.signal); } catch { /* Preserve the original error if the network fails. */ }
+        if (controller.signal.aborted) return;
+      }
       console.error('Error starting playback:', err);
       this.state.isLoading = false;
       this.state.isPlaying = false;
@@ -333,26 +336,12 @@ export class PlayerEngine {
       return;
     }
 
-    // YouTube tracks: retry once with a fresh proxied stream URL
+    // Do not race playTrack's play promise with another load or restart a stale track.
     if (isYoutubeTrack(track)) {
-      if (navigator.onLine && this.retryCount === 0) {
-        this.retryCount++;
-        try {
-          this.audio.src = `${youtubeStreamUrl(track)}?retry=${Date.now()}`;
-          await this.audio.play();
-          return;
-        } catch (err) {
-          console.warn('YT stream retry failed:', err);
-        }
-      }
-      const blob = await offlineManager.audioStorage.get(track.id);
-      if (blob) {
-        const objUrl = URL.createObjectURL(blob);
-        this.currentObjectUrl = objUrl;
-        this.state.playbackSource = 'local';
-        this.audio.src = objUrl;
-        await this.audio.play();
-      }
+      this.state.isLoading = false;
+      this.state.isPlaying = false;
+      this.state.error = 'YouTube audio playback failed. Press Play to try again.';
+      this.notifyState();
       return;
     }
 
@@ -389,7 +378,7 @@ export class PlayerEngine {
   public async play(): Promise<void> {
     this.state.error = null;
     if (this.state.currentTrack) {
-      if (!this.audio.src) {
+      if (!this.audio.src || this.audio.error) {
         await this.playTrack(this.state.currentTrack);
       } else {
         try {

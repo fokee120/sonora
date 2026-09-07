@@ -8,13 +8,13 @@ export function isDriveTrack(track: Track): boolean {
 
 export function youtubeStreamUrl(track: Track): string {
   const videoId = youtubeVideoId(track);
-  if (!/^\w{11}$/.test(videoId)) throw new Error('Invalid YouTube track. Search for it again.');
+  if (!/^[\w-]{11}$/.test(videoId)) throw new Error('Invalid YouTube track. Search for it again.');
   return `/api/ytmusic/stream/${encodeURIComponent(videoId)}`;
 }
 
 export function youtubeDownloadUrl(track: Track): string {
   const videoId = youtubeVideoId(track);
-  if (!/^\w{11}$/.test(videoId)) throw new Error('Invalid YouTube track. Search for it again.');
+  if (!/^[\w-]{11}$/.test(videoId)) throw new Error('Invalid YouTube track. Search for it again.');
   return `/api/ytmusic/download/${encodeURIComponent(videoId)}`;
 }
 
@@ -70,4 +70,17 @@ export async function fetchTrackAudio(track: Track, signal?: AbortSignal): Promi
   const response = await fetch(await cloudStreamUrl(track, signal), { signal });
   if (!response.ok) throw await responseError(response, 'Could not download audio');
   return response;
+}
+
+/** Read proxy failures as JSON instead of exposing the browser's codec error. */
+export async function youtubePlaybackError(track: Track, signal: AbortSignal): Promise<Error> {
+  const response = await fetch(youtubeStreamUrl(track), {
+    signal, cache: 'no-store', headers: { Range: 'bytes=0-0' },
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    return new Error(data.details || data.error || 'YouTube audio is unavailable. Check the downloader configuration in Settings.');
+  }
+  await response.body?.cancel();
+  return new Error('This audio format could not be played. Configure the YouTube audio downloader to use MP3 or M4A in Settings.');
 }

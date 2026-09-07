@@ -479,7 +479,7 @@ export class YoutubeMusicClient {
         const formats: JsonLike[] = data?.streamingData?.adaptiveFormats ?? [];
         const audioFormats = formats.filter((f) => {
           const mime = String(f.mimeType || '');
-          const hasUrl = Boolean(f.url) || Boolean(f.signatureCipher);
+          const hasUrl = Boolean(f.url);
           return mime.startsWith('audio/') && hasUrl;
         });
 
@@ -487,9 +487,9 @@ export class YoutubeMusicClient {
           throw new Error('No audio-only formats returned');
         }
 
-        // Prefer highest bitrate audio stream
+        // Prefer browser-compatible AAC/MP4, then bitrate within that format.
         const best = [...audioFormats].sort(
-          (a, b) => Number(b.bitrate || 0) - Number(a.bitrate || 0)
+          (a, b) => Number(String(b.mimeType).startsWith('audio/mp4')) - Number(String(a.mimeType).startsWith('audio/mp4')) || Number(b.bitrate || 0) - Number(a.bitrate || 0)
         )[0];
 
         let streamUrl: string | undefined = best.url;
@@ -561,7 +561,7 @@ export class YoutubeMusicClient {
         const audioStreams: JsonLike[] = data?.audioStreams ?? [];
         const usable = audioStreams
           .filter((s) => typeof s.url === 'string' && s.url)
-          .sort((a, b) => Number(b.bitrate || 0) - Number(a.bitrate || 0));
+          .sort((a, b) => Number(String(b.mimeType).startsWith('audio/mp4')) - Number(String(a.mimeType).startsWith('audio/mp4')) || Number(b.bitrate || 0) - Number(a.bitrate || 0));
         if (usable.length === 0) {
           throw new Error('no audio streams');
         }
