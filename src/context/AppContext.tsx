@@ -19,6 +19,11 @@ import {
   getDriveAccessToken,
   logoutGoogleDrive,
 } from '../lib/googleAuth.js';
+import {
+  searchYoutubeMusic as searchYoutubeMusicApi,
+  isYoutubeTrack,
+} from '../lib/ytmusic/youtubeMusic.js';
+import type { YtmFilter } from '../lib/ytmusic/youtubeMusic.js';
 
 interface AppContextType {
   // Navigation
@@ -49,6 +54,14 @@ interface AppContextType {
   isScanningDrive: boolean;
   scanGoogleDrive: (folderId?: string) => Promise<void>;
   setDriveUser: (user: User | null) => void;
+
+  // YouTube Music
+  ytResults: Track[];
+  ytFilter: YtmFilter;
+  isSearchingYt: boolean;
+  ytSearchError: string | null;
+  searchYoutubeMusic: (query: string, filter?: YtmFilter) => Promise<void>;
+  clearYtResults: () => void;
 
   // Create Playlist Modal
   isCreatePlaylistOpen: boolean;
@@ -131,6 +144,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isDriveConnected, setIsDriveConnected] = useState<boolean>(false);
   const [isScanningDrive, setIsScanningDrive] = useState<boolean>(false);
   const driveScanController = useRef<AbortController | null>(null);
+
+  // YouTube Music search state
+  const [ytResults, setYtResults] = useState<Track[]>([]);
+  const [ytFilter, setYtFilter] = useState<YtmFilter>('songs');
+  const [isSearchingYt, setIsSearchingYt] = useState<boolean>(false);
+  const ytErrorRef = useRef<string | null>(null);
 
   const saveDuration = useCallback(async (track: Track, duration: number) => {
     if (!Number.isFinite(duration) || duration <= 0) return;
@@ -420,6 +439,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return unsub;
   }, [scanGoogleDrive]);
 
+  // Merge YouTube Music tracks saved via offline downloads (IndexedDB)
+  // into the active library so they show up in Library/Downloads/Search.
+  const mergeSavedYoutubeTracks = useCallback(async () => {
+    try {
+      const allCached = await dbService.getAllTracks();
+      const ytTracks = allCached.filter((t) => isYoutubeTrack(t));
+      if (ytTracks.length === 0) return;
+      setTracks((prev) => {
+        const known = new Set(prev.map((t) => t.id));
+        const additions = ytTracks.filter((t) => !known.has(t.id));
+        return additions.length > 0 ? [...additions, ...prev] : prev;
+      });
+    } catch (err) {
+      console.warn('Could not merge saved YouTube tracks:', err);
+    }
+  }, []);
+
   // Load Playlists, Favorites, and History
   const loadUserData = useCallback(async () => {
     try {
@@ -443,12 +479,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     refreshStorageInfo();
   }, [checkSession, refreshLibrary, loadUserData, refreshStorageInfo]);
 
+  // React to download completions: newly saved YT tracks join the library
+  useEffect(() => {
+    const unsub = offlineManager.subscribe(() => {
+      void mergeSavedYoutubeTracks();
+    });
+    return unsub;
+  }, [mergeSavedYoutubeTracks]);
+
+  // Re-merge saved YT tracks whenever the base library or connection changes
+  useEffect(() => {
+    void mergeSavedYoutubeTracks();
+  }, [isOnline, isLoadingLibrary, mergeSavedYoutubeTracks]);
+
   // When connection changes, reload library
   useEffect(() => {
     if (isOnline) {
       refreshLibrary();
     }
   }, [isOnline, refreshLibrary]);
+
+  // YouTube Music catalog search (server-proxied)
+  const searchYoutubeMusic = useCallback(async (query: string, filter: YtmFilter = 'songs') => {
+    const trimmed = query.trim();
+    setYtFilter(filter);
+    if (!trimmed) {
+      setYtResults([]);
+      return;
+    }
+    setIsSearchingYt(true);
+    try {
+      const tracks = await searchYoutubeMusicApi(trimmed, filter);
+      ytErrorRef.current = null;
+      setYtResults(tracks);
+    } catch (err: any) {
+      ytErrorRef.current = err?.message || 'YouTube Music search failed';
+      setYtResults([]);
+      throw err;
+    } finally {
+      setIsSearchingYt(false);
+    }
+  }, []);
+
+  const ytSearchError = ytErrorRef.current;
 
   // Offline filtering: when offline, show ONLY what is downloaded locally
   const downloadedTrackIds = offlineManager.getAllDownloadedTrackIds();
@@ -703,6 +776,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isScanningDrive,
         scanGoogleDrive,
         setDriveUser,
+        ytResults,
+        ytFilter,
+        isSearchingYt,
+        ytSearchError,
+        searchYoutubeMusic,
+        clearYtResults: () => {
+          ytErrorRef.current = null;
+          setYtResults([]);
+        },
         isCreatePlaylistOpen,
         createPlaylistInitialTrackId,
         openCreatePlaylist,

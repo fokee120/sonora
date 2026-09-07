@@ -1,3 +1,5 @@
+export type TrackSource = 'gcs' | 'gdrive' | 'ytmusic';
+
 export interface Track {
   id: string;
   title: string;
@@ -15,6 +17,10 @@ export interface Track {
   lyrics?: string;
   sizeBytes?: number;
   format?: string;
+  /** Which backend this track streams/downloads from. */
+  source?: TrackSource;
+  /** YouTube video ID when source === 'ytmusic'. */
+  sourceId?: string;
 }
 
 export interface Album {

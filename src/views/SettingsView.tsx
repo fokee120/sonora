@@ -18,6 +18,7 @@ import { useApp } from '../context/AppContext.js';
 import { PWAInstallButton } from '../components/common/PWAInstallButton.js';
 import { usePWAInstall } from '../hooks/usePWAInstall.js';
 import { GoogleDriveConnectCard } from '../components/auth/GoogleDriveConnectCard.js';
+import { YoutubeMusicCard } from '../components/settings/YoutubeMusicCard.js';
 
 interface StorageApiStatus {
   gcsConfigured: boolean;
@@ -166,6 +167,9 @@ AUTH_SECRET="your_custom_secret_key_phrase"`;
 
       {/* Primary Google Drive Audio Integration */}
       <GoogleDriveConnectCard />
+
+      {/* YouTube Music Integration (search + third-party downloader + offline) */}
+      <YoutubeMusicCard />
 
       {/* Google Cloud Storage Connection Status & Scanner */}
       <section className="p-6 rounded-3xl bg-zinc-900/50 border border-zinc-800/80 shadow-xl space-y-5">

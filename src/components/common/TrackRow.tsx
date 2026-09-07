@@ -10,11 +10,13 @@ import {
   Plus,
   ListPlus,
   Trash2,
+  Youtube,
 } from 'lucide-react';
 import { Track } from '../../types/index.js';
 import { useApp } from '../../context/AppContext.js';
 import { usePlayer } from '../../hooks/usePlayer.js';
 import { offlineManager } from '../../lib/offline/OfflineManager.js';
+import { isYoutubeTrack } from '../../lib/ytmusic/youtubeMusic.js';
 
 interface TrackRowProps {
   track: Track;
@@ -48,6 +50,7 @@ export const TrackRow: React.FC<TrackRowProps> = ({
 
   const isCurrent = currentTrack?.id === track.id;
   const isCurrentlyPlaying = isCurrent && isPlaying;
+  const isYoutube = isYoutubeTrack(track);
   const downloaded = isDownloaded(track.id);
   const downloading = isDownloading(track.id);
   const downloadState = offlineManager.getDownloadState(track.id);
@@ -129,6 +132,14 @@ export const TrackRow: React.FC<TrackRowProps> = ({
             title="Stored Offline"
           >
             <CheckCircle2 className="w-2.5 h-2.5 stroke-[3]" />
+          </div>
+        )}
+        {isYoutube && !downloaded && (
+          <div
+            className="absolute top-0.5 left-0.5 bg-red-600/90 rounded-sm px-0.5 flex items-center justify-center"
+            title="From YouTube Music"
+          >
+            <Youtube className="w-2.5 h-2.5 text-white" />
           </div>
         )}
       </div>

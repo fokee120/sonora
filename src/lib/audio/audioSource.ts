@@ -1,8 +1,21 @@
 import type { Track } from '../../types/index.js';
 import { getDriveAccessToken } from '../googleAuth.js';
+import { isYoutubeTrack, youtubeVideoId } from '../ytmusic/youtubeMusic.js';
 
 export function isDriveTrack(track: Track): boolean {
   return track.id.startsWith('gdrive:') || track.cloudKey.startsWith('gdrive://');
+}
+
+export function youtubeStreamUrl(track: Track): string {
+  const videoId = youtubeVideoId(track);
+  if (!/^\w{11}$/.test(videoId)) throw new Error('Invalid YouTube track. Search for it again.');
+  return `/api/ytmusic/stream/${encodeURIComponent(videoId)}`;
+}
+
+export function youtubeDownloadUrl(track: Track): string {
+  const videoId = youtubeVideoId(track);
+  if (!/^\w{11}$/.test(videoId)) throw new Error('Invalid YouTube track. Search for it again.');
+  return `/api/ytmusic/download/${encodeURIComponent(videoId)}`;
 }
 
 export function driveMediaUrl(track: Track): string {
@@ -48,6 +61,11 @@ export async function cloudStreamUrl(track: Track, signal?: AbortSignal): Promis
 }
 
 export async function fetchTrackAudio(track: Track, signal?: AbortSignal): Promise<Response> {
+  if (isYoutubeTrack(track)) {
+    const response = await fetch(youtubeDownloadUrl(track), { signal, cache: 'no-store' });
+    if (!response.ok) throw await responseError(response, 'Could not download YouTube audio');
+    return response;
+  }
   if (isDriveTrack(track)) return fetchDriveAudio(track, { signal });
   const response = await fetch(await cloudStreamUrl(track, signal), { signal });
   if (!response.ok) throw await responseError(response, 'Could not download audio');

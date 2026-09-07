@@ -1,7 +1,8 @@
 import { Track, PlayerState, RepeatMode, QueueItem } from '../../types/index.js';
 import { offlineManager } from '../offline/OfflineManager.js';
 import { dbService } from '../db.js';
-import { cloudStreamUrl, fetchDriveAudio, isDriveTrack } from './audioSource.js';
+import { cloudStreamUrl, fetchDriveAudio, isDriveTrack, youtubeStreamUrl } from './audioSource.js';
+import { isYoutubeTrack, youtubeVideoId } from '../ytmusic/youtubeMusic.js';
 
 type StateListener = (state: PlayerState) => void;
 type QueueListener = (queue: QueueItem[]) => void;
@@ -292,7 +293,11 @@ export class PlayerEngine {
       }
 
       this.state.playbackSource = 'cloud';
-      if (isDriveTrack(track)) {
+      if (isYoutubeTrack(track)) {
+        // Streams through the server-side YT Music proxy (Range supported).
+        void youtubeVideoId(track); // validates shape early
+        this.audio.src = youtubeStreamUrl(track);
+      } else if (isDriveTrack(track)) {
         const response = await fetchDriveAudio(track, { signal: controller.signal });
         const blob = await response.blob();
         controller.signal.throwIfAborted();
@@ -325,6 +330,29 @@ export class PlayerEngine {
       this.state.isPlaying = false;
       this.state.error = 'This browser could not play the audio file. Try another browser or an MP3 version.';
       this.notifyState();
+      return;
+    }
+
+    // YouTube tracks: retry once with a fresh proxied stream URL
+    if (isYoutubeTrack(track)) {
+      if (navigator.onLine && this.retryCount === 0) {
+        this.retryCount++;
+        try {
+          this.audio.src = `${youtubeStreamUrl(track)}?retry=${Date.now()}`;
+          await this.audio.play();
+          return;
+        } catch (err) {
+          console.warn('YT stream retry failed:', err);
+        }
+      }
+      const blob = await offlineManager.audioStorage.get(track.id);
+      if (blob) {
+        const objUrl = URL.createObjectURL(blob);
+        this.currentObjectUrl = objUrl;
+        this.state.playbackSource = 'local';
+        this.audio.src = objUrl;
+        await this.audio.play();
+      }
       return;
     }
 
