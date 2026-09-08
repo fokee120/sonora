@@ -35,13 +35,9 @@ RUN git clone \
 
 WORKDIR /opt/bgutil-ytdlp-pot-provider/server
 
-RUN npm ci --no-audit --no-fund
+RUN npm ci --include=dev --no-audit --no-fund
 
-RUN ls -la \
- && ls -la src \
- && ls -la types \
- && cat tsconfig.json \
- && npx tsc
+RUN npx tsc
 
 RUN apt-get clean && rm -rf /var/lib/apt/lists/*
 
