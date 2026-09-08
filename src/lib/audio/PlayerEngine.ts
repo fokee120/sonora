@@ -1,8 +1,9 @@
 import { Track, PlayerState, RepeatMode, QueueItem } from '../../types/index.js';
 import { offlineManager } from '../offline/OfflineManager.js';
 import { dbService } from '../db.js';
-import { cloudStreamUrl, fetchDriveAudio, isDriveTrack, fetchYoutubeAudio } from './audioSource.js';
+import { cloudStreamUrl, fetchDriveAudio, isDriveTrack, youtubeStreamUrl } from './audioSource.js';
 import { isYoutubeTrack } from '../ytmusic/youtubeMusic.js';
+import { logPerf, perfNow } from '../perf.js';
 
 type StateListener = (state: PlayerState) => void;
 type QueueListener = (queue: QueueItem[]) => void;
@@ -34,6 +35,7 @@ export class PlayerEngine {
   };
 
   private retryCount = 0;
+  private currentLoadStartedAt = 0;
 
   private constructor() {
     this.audio = new Audio();
@@ -99,12 +101,16 @@ export class PlayerEngine {
 
     this.audio.addEventListener('playing', () => {
       this.state.isLoading = false;
+      if (this.currentLoadStartedAt) {
+        logPerf('player playing', this.currentLoadStartedAt, { source: this.state.playbackSource });
+        this.currentLoadStartedAt = 0;
+      }
       this.notifyState();
     });
 
     this.audio.addEventListener('timeupdate', () => {
       this.state.currentTime = this.audio.currentTime;
-      if (this.audio.duration && !isNaN(this.audio.duration)) {
+      if (Number.isFinite(this.audio.duration) && this.audio.duration > 0) {
         this.state.duration = this.audio.duration;
       }
       this.updateMediaSessionPosition();
@@ -121,6 +127,9 @@ export class PlayerEngine {
     this.audio.addEventListener('loadedmetadata', () => {
       this.recordDuration();
       this.state.isLoading = false;
+      if (this.currentLoadStartedAt) {
+        logPerf('player metadata', this.currentLoadStartedAt, { source: this.state.playbackSource });
+      }
       this.updateMediaSessionPosition();
       this.notifyState();
     });
@@ -256,6 +265,7 @@ export class PlayerEngine {
     this.state.bufferedTime = 0;
     this.state.error = null;
     this.retryCount = 0;
+    this.currentLoadStartedAt = perfNow();
     this.notifyState();
 
     // Persist current track
@@ -294,14 +304,9 @@ export class PlayerEngine {
 
       this.state.playbackSource = 'cloud';
       if (isYoutubeTrack(track)) {
-        // The audio backend transcodes into a non-seekable HTTP stream. A completed Blob gives
-        // the native Sonora player reliable metadata and local seeking in Brave too.
-        const response = await fetchYoutubeAudio(track, controller.signal);
-        const blob = await response.blob();
         controller.signal.throwIfAborted();
-        if (!blob.size) throw new Error('Sonora audio backend returned an empty audio file. Retry the track.');
-        this.currentObjectUrl = URL.createObjectURL(blob);
-        this.audio.src = this.currentObjectUrl;
+        this.audio.src = youtubeStreamUrl(track);
+        logPerf('youtube stream src assigned', this.currentLoadStartedAt, { trackId: track.id });
       } else if (isDriveTrack(track)) {
         const response = await fetchDriveAudio(track, { signal: controller.signal });
         const blob = await response.blob();
@@ -412,10 +417,22 @@ export class PlayerEngine {
   }
 
   public seek(timeInSeconds: number): void {
-    if (this.audio.duration) {
-      const clamped = Math.max(0, Math.min(timeInSeconds, this.audio.duration));
+    const duration = this.audio.duration;
+    if (Number.isFinite(duration) && duration > 0) {
+      const clamped = Math.max(0, Math.min(timeInSeconds, duration));
       this.audio.currentTime = clamped;
       this.state.currentTime = clamped;
+      this.notifyState();
+      return;
+    }
+
+    try {
+      const clamped = Math.max(0, timeInSeconds);
+      this.audio.currentTime = clamped;
+      this.state.currentTime = this.audio.currentTime;
+      this.notifyState();
+    } catch {
+      this.state.error = 'Seeking is not available until more of this stream is buffered.';
       this.notifyState();
     }
   }

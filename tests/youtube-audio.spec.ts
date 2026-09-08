@@ -50,7 +50,7 @@ for (const failure of [false, true]) {
       return (await import(path)).playerEngine.getState();
     });
     if (failure) {
-      expect((await state()).error).toContain('Sonora Audio Service is unavailable');
+      expect((await state()).error).toContain('YouTube MP3 could not be decoded');
       expect((await state()).isLoading).toBe(false);
     } else {
       await expect.poll(async () => (await state()).currentTime).toBeGreaterThan(0);
@@ -75,4 +75,46 @@ test('audio backend reports HTTP failure instead of a generic connection error',
     catch (error) { return (error as Error).message; }
   });
   expect(message).toContain('HTTP 404');
+});
+
+test('YouTube playback uses the audio element stream instead of fetch blob buffering', async ({ page }) => {
+  const audio = wav();
+  await page.route('**/api/**', async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.startsWith('/api/ytmusic/stream/')) {
+      return route.fulfill({
+        status: 200,
+        body: audio,
+        headers: { 'content-type': 'audio/wav', 'content-length': String(audio.length) },
+      });
+    }
+    return route.fulfill({ json: path === '/api/auth/session' ? { user: null, isAuthenticated: false, authRequired: false, authorizedEmails: [] } : { tracks: [], albums: [], artists: [] } });
+  });
+  await page.goto('/');
+  await page.waitForLoadState('networkidle');
+  await page.evaluate(async track => {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/api/ytmusic/stream/')) {
+        throw new Error('YouTube playback should not fetch and blob-buffer the stream');
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    const originalBlob = Response.prototype.blob;
+    Response.prototype.blob = function blobGuard() {
+      throw new Error('YouTube playback should not call response.blob()');
+    };
+    try {
+      const path = '/src/lib/audio/PlayerEngine.ts';
+      await (await import(path)).playerEngine.playTrack(track);
+    } finally {
+      Response.prototype.blob = originalBlob;
+      window.fetch = originalFetch;
+    }
+  }, track);
+  const state = () => page.evaluate(async () => {
+    const path = '/src/lib/audio/PlayerEngine.ts';
+    return (await import(path)).playerEngine.getState();
+  });
+  await expect.poll(async () => (await state()).currentTime).toBeGreaterThan(0);
 });

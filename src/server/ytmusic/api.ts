@@ -9,6 +9,12 @@ const app = express();
 app.use(express.json());
 
 const VALID_YT_VIDEO_ID = /^[\w-]{11}$/;
+const DEBUG_PERF = process.env.SONORA_DEBUG_PERF === 'true';
+
+function logServerPerf(label: string, startedAt: number, extra?: Record<string, unknown>): void {
+  if (!DEBUG_PERF) return;
+  console.log(`[perf] ${label}: ${Date.now() - startedAt}ms`, extra || '');
+}
 
 // Await the entire transfer: unhandled upstream stream errors can crash a function.
 async function proxyAudioBackendResponse(
@@ -16,6 +22,7 @@ async function proxyAudioBackendResponse(
   videoId: string,
   signal?: AbortSignal
 ): Promise<void> {
+  const startedAt = Date.now();
   const upstream = await audioBackendService.fetchAudio(videoId, signal);
   const reader = upstream.body!.getReader();
   const first = await reader.read();
@@ -38,6 +45,7 @@ async function proxyAudioBackendResponse(
   res.setHeader('Content-Type', 'audio/mpeg');
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  logServerPerf('audio proxy first byte', startedAt, { videoId });
   await pipeline(Readable.from(chunks()), res);
 }
 
@@ -64,6 +72,7 @@ app.post('/api/ytmusic/audio-backend-test', async (req, res) => {
 
 // Search the YouTube Music catalog
 app.get('/api/ytmusic/search', async (req, res) => {
+  const startedAt = Date.now();
   try {
     const query = String(req.query.q || '').trim();
     const filterRaw = String(req.query.filter || 'songs');
@@ -76,6 +85,7 @@ app.get('/api/ytmusic/search', async (req, res) => {
     }
 
     const result = await youtubeMusicClient.search(query, filter);
+    logServerPerf('ytmusic search', startedAt, { filter, resultCount: result.songs.length });
     res.json(result);
   } catch (err: any) {
     console.error('YT Music search error:', err);

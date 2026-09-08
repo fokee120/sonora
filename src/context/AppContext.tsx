@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Track,
   Album,
@@ -20,7 +20,7 @@ import {
   logoutGoogleDrive,
 } from '../lib/googleAuth.js';
 import {
-  searchYoutubeMusic as searchYoutubeMusicApi,
+  cachedSearchYoutubeMusic as searchYoutubeMusicApi,
   isYoutubeTrack,
 } from '../lib/ytmusic/youtubeMusic.js';
 import type { YtmFilter } from '../lib/ytmusic/youtubeMusic.js';
@@ -60,7 +60,7 @@ interface AppContextType {
   ytFilter: YtmFilter;
   isSearchingYt: boolean;
   ytSearchError: string | null;
-  searchYoutubeMusic: (query: string, filter?: YtmFilter) => Promise<void>;
+  searchYoutubeMusic: (query: string, filter?: YtmFilter, signal?: AbortSignal) => Promise<void>;
   clearYtResults: () => void;
 
   // Create Playlist Modal
@@ -130,7 +130,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [libraryError, setLibraryError] = useState<string | null>(null);
 
   const [storageInfo, setStorageInfo] = useState<StorageQuotaInfo | null>(null);
-  const [, setDownloadCounter] = useState<number>(0); // To trigger reactivity on downloads
+  const [downloadCounter, setDownloadCounter] = useState<number>(0); // To trigger reactivity on downloads
 
   const [authSession, setAuthSession] = useState<AuthSession>({
     user: null,
@@ -150,6 +150,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [ytFilter, setYtFilter] = useState<YtmFilter>('songs');
   const [isSearchingYt, setIsSearchingYt] = useState<boolean>(false);
   const ytErrorRef = useRef<string | null>(null);
+  const ytSearchSequence = useRef(0);
 
   const saveDuration = useCallback(async (track: Track, duration: number) => {
     if (!Number.isFinite(duration) || duration <= 0) return;
@@ -500,8 +501,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [isOnline, refreshLibrary]);
 
   // YouTube Music catalog search (server-proxied)
-  const searchYoutubeMusic = useCallback(async (query: string, filter: YtmFilter = 'songs') => {
+  const searchYoutubeMusic = useCallback(async (query: string, filter: YtmFilter = 'songs', signal?: AbortSignal) => {
     const trimmed = query.trim();
+    const sequence = ++ytSearchSequence.current;
     setYtFilter(filter);
     if (!trimmed) {
       setYtResults([]);
@@ -509,59 +511,72 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     setIsSearchingYt(true);
     try {
-      const tracks = await searchYoutubeMusicApi(trimmed, filter);
+      const tracks = await searchYoutubeMusicApi(trimmed, filter, signal);
+      if (sequence !== ytSearchSequence.current || signal?.aborted) return;
       ytErrorRef.current = null;
       setYtResults(tracks);
     } catch (err: any) {
+      if (err?.name === 'AbortError' || signal?.aborted) return;
+      if (sequence !== ytSearchSequence.current) return;
       ytErrorRef.current = err?.message || 'YouTube Music search failed';
       setYtResults([]);
       throw err;
     } finally {
-      setIsSearchingYt(false);
+      if (sequence === ytSearchSequence.current) setIsSearchingYt(false);
     }
   }, []);
 
   const ytSearchError = ytErrorRef.current;
 
   // Offline filtering: when offline, show ONLY what is downloaded locally
-  const downloadedTrackIds = offlineManager.getAllDownloadedTrackIds();
+  const downloadedTrackIds = useMemo(() => offlineManager.getAllDownloadedTrackIds(), [downloadCounter]);
 
-  const displayTracks = isOnline
-    ? tracks
-    : tracks.filter((t) => downloadedTrackIds.has(t.id));
+  const displayTracks = useMemo(
+    () => isOnline ? tracks : tracks.filter((t) => downloadedTrackIds.has(t.id)),
+    [downloadedTrackIds, isOnline, tracks]
+  );
 
-  const displayAlbums = isOnline
-    ? albums
-    : albums
-        .map((album) => {
-          const matchingTracks = (album.tracks || []).filter((t) =>
-            downloadedTrackIds.has(t.id)
-          );
-          if (matchingTracks.length === 0) return null;
-          return {
-            ...album,
-            tracks: matchingTracks,
-            trackCount: matchingTracks.length,
-          };
-        })
-        .filter((a): a is Album => a !== null);
+  const displayAlbums = useMemo(
+    () => isOnline
+      ? albums
+      : albums
+          .map((album) => {
+            const matchingTracks = (album.tracks || []).filter((t) =>
+              downloadedTrackIds.has(t.id)
+            );
+            if (matchingTracks.length === 0) return null;
+            return {
+              ...album,
+              tracks: matchingTracks,
+              trackCount: matchingTracks.length,
+            };
+          })
+          .filter((a): a is Album => a !== null),
+    [albums, downloadedTrackIds, isOnline]
+  );
 
-  const displayArtists = isOnline
-    ? artists
-    : artists
-        .map((artist) => {
-          const artistTracks = displayTracks.filter((t) => t.artist === artist.name);
-          if (artistTracks.length === 0) return null;
-          return {
-            ...artist,
-            trackCount: artistTracks.length,
-          };
-        })
-        .filter((a): a is Artist => a !== null);
+  const displayArtists = useMemo(
+    () => isOnline
+      ? artists
+      : artists
+          .map((artist) => {
+            const artistTracks = displayTracks.filter((t) => t.artist === artist.name);
+            if (artistTracks.length === 0) return null;
+            return {
+              ...artist,
+              trackCount: artistTracks.length,
+            };
+          })
+          .filter((a): a is Artist => a !== null),
+    [artists, displayTracks, isOnline]
+  );
 
-  const displayPlaylists = isOnline
-    ? playlists
-    : playlists.filter((pl) => pl.trackIds.some((id) => downloadedTrackIds.has(id)));
+  const displayPlaylists = useMemo(
+    () => isOnline
+      ? playlists
+      : playlists.filter((pl) => pl.trackIds.some((id) => downloadedTrackIds.has(id))),
+    [downloadedTrackIds, isOnline, playlists]
+  );
 
   // Offline helpers
   const isDownloaded = useCallback(

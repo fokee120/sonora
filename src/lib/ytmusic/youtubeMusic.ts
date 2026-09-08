@@ -77,6 +77,45 @@ export async function searchYoutubeMusic(
   return (data.songs || []).map(ytmSongToTrack);
 }
 
+const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const SEARCH_CACHE_MAX = 30;
+const searchCache = new Map<string, { expiresAt: number; tracks: Track[] }>();
+const inFlightSearches = new Map<string, Promise<Track[]>>();
+
+function searchKey(query: string, filter: YtmFilter): string {
+  return `${filter}:${query.trim().toLowerCase()}`;
+}
+
+export async function cachedSearchYoutubeMusic(
+  query: string,
+  filter: YtmFilter = 'songs',
+  signal?: AbortSignal
+): Promise<Track[]> {
+  const key = searchKey(query, filter);
+  const cached = searchCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.tracks;
+
+  const existing = inFlightSearches.get(key);
+  if (existing) return existing;
+
+  const request = searchYoutubeMusic(query, filter, signal)
+    .then((tracks) => {
+      searchCache.set(key, { expiresAt: Date.now() + SEARCH_CACHE_TTL_MS, tracks });
+      while (searchCache.size > SEARCH_CACHE_MAX) {
+        const oldest = searchCache.keys().next().value;
+        if (!oldest) break;
+        searchCache.delete(oldest);
+      }
+      return tracks;
+    })
+    .finally(() => {
+      if (inFlightSearches.get(key) === request) inFlightSearches.delete(key);
+    });
+
+  inFlightSearches.set(key, request);
+  return request;
+}
+
 export interface YtmStatus {
   searchAvailable: boolean;
   audioBackend: {

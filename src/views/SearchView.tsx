@@ -47,7 +47,7 @@ export const SearchView: React.FC = () => {
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
-      searchYoutubeMusic(q, ytFilter).catch((err: any) => {
+      searchYoutubeMusic(q, ytFilter, controller.signal).catch((err: any) => {
         if (err?.name === 'AbortError') return;
         setLocalYtError(err?.message || 'YouTube Music search failed');
       });
@@ -68,7 +68,10 @@ export const SearchView: React.FC = () => {
       clearYtResults();
     } else if (query.trim()) {
       // Re-run immediately when switching to YouTube with a live query
-      searchYoutubeMusic(query, ytFilter).catch((err: any) => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      searchYoutubeMusic(query, ytFilter, controller.signal).catch((err: any) => {
         setLocalYtError(err?.message || 'YouTube Music search failed');
       });
     }
@@ -202,9 +205,14 @@ export const SearchView: React.FC = () => {
             {YT_FILTERS.map((type) => (
               <button
                 key={type}
-                onClick={() => searchYoutubeMusic(query, type).catch((err: any) => {
+                onClick={() => {
+                  abortRef.current?.abort();
+                  const controller = new AbortController();
+                  abortRef.current = controller;
+                  searchYoutubeMusic(query, type, controller.signal).catch((err: any) => {
                   setLocalYtError(err?.message || 'YouTube Music search failed');
-                })}
+                  });
+                }}
                 className={`px-3 py-1 rounded-lg text-xs font-medium capitalize transition ${
                   ytFilter === type
                     ? 'bg-red-600 text-white shadow-xs'
@@ -299,6 +307,8 @@ export const SearchView: React.FC = () => {
                           src={album.artworkUrl || '/icon.svg'}
                           alt={album.title}
                           className="w-full aspect-square object-cover rounded-lg bg-zinc-950 mb-2"
+                          loading="lazy"
+                          decoding="async"
                         />
                         <p className="text-xs font-medium text-zinc-200 truncate">{album.title}</p>
                         <p className="text-[11px] text-zinc-500 truncate">{album.artist}</p>
@@ -327,6 +337,8 @@ export const SearchView: React.FC = () => {
                           src={artist.artworkUrl || '/icon.svg'}
                           alt={artist.name}
                           className="w-16 h-16 rounded-full object-cover bg-zinc-950 mb-2 border border-zinc-800"
+                          loading="lazy"
+                          decoding="async"
                         />
                         <p className="text-xs font-medium text-zinc-200 truncate w-full">
                           {artist.name}

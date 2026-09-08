@@ -121,6 +121,7 @@ export const TrackRow: React.FC<TrackRowProps> = ({
           alt={track.album}
           className="w-full h-full object-cover"
           loading="lazy"
+          decoding="async"
           referrerPolicy="no-referrer"
           onError={(e) => {
             (e.target as HTMLImageElement).src = '/icon.svg';
