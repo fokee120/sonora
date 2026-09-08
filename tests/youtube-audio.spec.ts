@@ -21,13 +21,13 @@ function wav(seconds = 4): Buffer {
 }
 
 
-const track = { id: 'ytm:abc-def_123', source: 'ytmusic', sourceId: 'abc-def_123', cloudKey: 'ytmusic://abc-def_123', title: 'YouTube Test', artist: 'Artist', album: 'YouTube Music', duration: 4, format: 'm4a' };
+const track = { id: 'ytm:abc-def_123', source: 'ytmusic', sourceId: 'abc-def_123', cloudKey: 'ytmusic://abc-def_123', title: 'YouTube Test', artist: 'Artist', album: 'YouTube Music', duration: 4, format: 'mp3' };
 for (const failure of [false, true]) {
   test(failure ? 'shows provider error instead of unsupported source' : 'YouTube audio plays and seeks in native player', async ({ page }) => {
     await page.route('**/api/**', async route => {
       const path = new URL(route.request().url()).pathname;
       if (path.startsWith('/api/ytmusic/stream/')) {
-        if (failure) return route.fulfill({ status: 502, json: { error: 'Stream failed', details: 'Provider is unavailable. Configure Cobalt in Settings.' } });
+        if (failure) return route.fulfill({ status: 502, json: { error: 'Stream failed', details: 'Sonora Audio Service is unavailable.' } });
         const audio = wav();
         const range = route.request().headers().range?.match(/bytes=(\d+)-(\d*)/);
         const start = range ? Number(range[1]) : 0;
@@ -50,7 +50,7 @@ for (const failure of [false, true]) {
       return (await import(path)).playerEngine.getState();
     });
     if (failure) {
-      expect((await state()).error).toContain('Provider is unavailable');
+      expect((await state()).error).toContain('Sonora Audio Service is unavailable');
       expect((await state()).isLoading).toBe(false);
     } else {
       await expect.poll(async () => (await state()).currentTime).toBeGreaterThan(0);
@@ -65,13 +65,13 @@ for (const failure of [false, true]) {
   });
 }
 
-test('downloader reports HTTP failure instead of a generic connection error', async ({ page }) => {
+test('audio backend reports HTTP failure instead of a generic connection error', async ({ page }) => {
   await page.route('**/api/**', route => route.fulfill({ status: 404, contentType: 'text/plain', body: 'NOT_FOUND' }));
   await page.goto('/');
     await page.waitForLoadState('networkidle');
   const message = await page.evaluate(async () => {
     const path = '/src/lib/ytmusic/youtubeMusic.ts';
-    try { await (await import(path)).testDownloader(); return ''; }
+    try { await (await import(path)).testAudioBackend(); return ''; }
     catch (error) { return (error as Error).message; }
   });
   expect(message).toContain('HTTP 404');

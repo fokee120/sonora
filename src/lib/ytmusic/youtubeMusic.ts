@@ -48,7 +48,7 @@ export function ytmSongToTrack(song: YtmSongDto): Track {
     duration: song.durationSeconds || 0,
     artworkUrl: song.thumbnailUrl,
     cloudKey: `ytmusic://${song.videoId}`,
-    format: 'm4a',
+    format: 'mp3',
     source: 'ytmusic',
     sourceId: song.videoId,
   };
@@ -79,11 +79,9 @@ export async function searchYoutubeMusic(
 
 export interface YtmStatus {
   searchAvailable: boolean;
-  downloader: {
-    enabled: boolean;
+  audioBackend: {
     configured: boolean;
     hasApiKey: boolean;
-    audioFormat: string;
     url: string | null;
   };
 }
@@ -98,13 +96,12 @@ export async function fetchYoutubeMusicStatus(signal?: AbortSignal): Promise<Ytm
   }
 }
 
-async function downloaderRequest(path: string, body?: unknown): Promise<any> {
+async function audioBackendRequest(path: string): Promise<any> {
   let response: Response;
   try {
     response = await fetch(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   } catch {
     throw new Error('Could not connect to Sonora. Check your connection and try again.');
@@ -113,21 +110,10 @@ async function downloaderRequest(path: string, body?: unknown): Promise<any> {
   if (!response.ok) {
     const detail = data?.details || data?.error;
     throw new Error(typeof detail === 'string' ? detail :
-      'Sonora downloader API returned HTTP ' + response.status + '. Check the deployment API routes and function logs.');
+      'Sonora audio backend API returned HTTP ' + response.status + '. Check the deployment API routes and function logs.');
   }
-  if (!data) throw new Error('Sonora returned a page instead of downloader JSON. Check the deployment API routes.');
+  if (!data) throw new Error('Sonora returned a page instead of audio backend JSON. Check the deployment API routes.');
   return data;
-}
-
-export async function saveDownloaderConfig(config: {
-  enabled?: boolean;
-  url?: string;
-  apiKey?: string;
-  audioFormat?: string;
-}): Promise<YtmStatus['downloader']> {
-  const data = await downloaderRequest('/api/ytmusic/downloader-config', config);
-  if (!data.downloader) throw new Error('Sonora returned an invalid downloader configuration response.');
-  return data.downloader;
 }
 
 export interface DownloaderTestResult {
@@ -135,10 +121,10 @@ export interface DownloaderTestResult {
   message: string;
 }
 
-export async function testDownloader(): Promise<DownloaderTestResult> {
-  const data = await downloaderRequest('/api/ytmusic/downloader-test');
+export async function testAudioBackend(): Promise<DownloaderTestResult> {
+  const data = await audioBackendRequest('/api/ytmusic/audio-backend-test');
   if (typeof data.ok !== 'boolean' || typeof data.message !== 'string') {
-    throw new Error('Sonora returned an invalid downloader test response.');
+    throw new Error('Sonora returned an invalid audio backend test response.');
   }
   return data;
 }

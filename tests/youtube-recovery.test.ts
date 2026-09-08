@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import app from '../src/server/ytmusic/api.js';
 import { youtubeMusicClient } from '../src/server/ytmusic/YoutubeMusicClient.js';
 import { matchingUploads } from '../src/server/ytmusic/matchingUploads.js';
-import { downloaderService } from '../src/server/ytmusic/DownloaderService.js';
+import { audioBackendService } from '../src/server/ytmusic/AudioBackendService.js';
 
 const original = { videoId: 'lYBUbBu4W08', title: 'Never Gonna Give You Up', artist: 'Rick Astley', durationSeconds: 214 };
 const candidate = { ...original, videoId: 'dQw4w9WgXcQ' };
@@ -18,20 +18,17 @@ test('alternate upload matching rejects different artists, versions, and duratio
   ]), [candidate]);
 });
 
-test('playback and downloads recover an empty Cobalt upload using matching Cobalt audio', async () => {
+test('playback and downloads recover an empty backend upload using matching MP3 audio', async () => {
   const realFetch = globalThis.fetch;
   const realSearch = youtubeMusicClient.search;
-  downloaderService.setConfig({ enabled: true, url: 'https://cobalt.test', audioFormat: 'mp3' });
+  audioBackendService.setConfig({ enabled: true, url: 'https://audio.test' });
   youtubeMusicClient.search = async () => ({ query: '', filter: 'videos', songs: [candidate] });
   const resolved: string[] = [];
-  globalThis.fetch = (async (url: any, options: any) => {
-    if (String(url) === 'https://cobalt.test') {
-      const id = new URL(JSON.parse(options.body).url).searchParams.get('v')!;
-      resolved.push(id);
-      return Response.json({ status: 'tunnel', url: 'https://media.test/' + id });
-    }
-    assert.ok(String(url).startsWith('https://media.test/'));
-    return new Response(String(url).endsWith(original.videoId) ? new Uint8Array() : new Uint8Array([1, 2, 3, 4]), { headers: { 'content-type': 'audio/mpeg' } });
+  globalThis.fetch = (async (url: any) => {
+    assert.ok(String(url).startsWith('https://audio.test/audio/'));
+    const id = String(url).split('/').pop()!;
+    resolved.push(id);
+    return new Response(id === original.videoId ? new Uint8Array() : new Uint8Array([1, 2, 3, 4]), { headers: { 'content-type': 'audio/mpeg' } });
   }) as typeof fetch;
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>(resolve => server.once('listening', resolve));

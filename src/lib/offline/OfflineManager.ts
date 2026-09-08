@@ -29,6 +29,7 @@ export class OfflineManager {
 
   private async init(): Promise<void> {
     try {
+      await this.requestPersistentStorageOnce();
       const records = await dbService.getAllDownloads();
       for (const record of records) {
         this.downloadsCache.set(record.trackId, record);
@@ -36,6 +37,18 @@ export class OfflineManager {
       this.notify();
     } catch (err) {
       console.error('Failed to initialize downloads cache:', err);
+    }
+  }
+
+  private async requestPersistentStorageOnce(): Promise<void> {
+    if (!navigator.storage?.persist || !navigator.storage?.persisted) return;
+    try {
+      const alreadyPersisted = await navigator.storage.persisted();
+      if (alreadyPersisted || localStorage.getItem('sonora_storage_persist_requested') === '1') return;
+      localStorage.setItem('sonora_storage_persist_requested', '1');
+      await navigator.storage.persist();
+    } catch (err) {
+      console.warn('Failed to request persistent storage:', err);
     }
   }
 

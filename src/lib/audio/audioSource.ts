@@ -70,7 +70,7 @@ export async function fetchTrackAudio(track: Track, signal?: AbortSignal): Promi
   return response;
 }
 
-/** A single full GET avoids unsupported Range requests on transcoded Cobalt audio. */
+/** A single full GET avoids unsupported Range requests while the audio backend transcodes MP3. */
 export async function fetchYoutubeAudio(track: Track, signal?: AbortSignal, download = false): Promise<Response> {
   const metadata = new URLSearchParams({ title: track.title, artist: track.artist, duration: String(track.duration || 0) });
   const response = await fetch(`${download ? youtubeDownloadUrl(track) : youtubeStreamUrl(track)}?${metadata}`, {
@@ -84,7 +84,7 @@ export async function fetchYoutubeAudio(track: Track, signal?: AbortSignal, down
   const contentType = response.headers.get('content-type') || '';
   if (/text\/|application\/(json|xml)/i.test(contentType)) {
     await response.body?.cancel();
-    throw new Error('Cobalt returned a page instead of audio. Check that the tunnel points to the Cobalt API.');
+    throw new Error('Sonora audio backend returned a page instead of MP3 audio.');
   }
   return response;
 }

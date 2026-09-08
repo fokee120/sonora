@@ -1,13 +1,17 @@
 import { test, expect } from '@playwright/test';
 import api from '../src/server/ytmusic/api.js';
-import { downloaderService } from '../src/server/ytmusic/DownloaderService.js';
+import { audioBackendService } from '../src/server/ytmusic/AudioBackendService.js';
 
-// Opt-in integration: real Cobalt media, with only catalog/auth fixtures mocked.
+// Opt-in integration: real Sonora Audio Service media, with only catalog/auth fixtures mocked.
 test.use({ serviceWorkers: 'block' });
-test('real Cobalt MP3 plays, seeks, downloads through the button and plays offline', async ({ page, context }) => {
-  test.skip(!process.env.COBALT_LIVE_URL, 'Set COBALT_LIVE_URL to your running Cobalt instance.');
+test('real Sonora Audio Service MP3 plays, seeks, downloads through the button and plays offline', async ({ page, context }) => {
+  test.skip(!process.env.SONORA_AUDIO_API_URL, 'Set SONORA_AUDIO_API_URL to your running audio service.');
   test.setTimeout(120000);
-  downloaderService.setConfig({ enabled: true, url: process.env.COBALT_LIVE_URL!, audioFormat: 'mp3' });
+  audioBackendService.setConfig({
+    enabled: true,
+    url: process.env.SONORA_AUDIO_API_URL!,
+    apiKey: process.env.SONORA_AUDIO_API_KEY || '',
+  });
   const server = api.listen(0, '127.0.0.1');
   await new Promise<void>(resolve => server.once('listening', resolve));
   const { port } = server.address() as { port: number };

@@ -529,7 +529,7 @@ export class YoutubeMusicClient {
 
     const hint =
       /bot|sign in/i.test(lastError?.message || '')
-        ? ' — YouTube is bot-blocking this server IP. Configure a Cobalt downloader instance in Settings, or run one via COBALT_API_URL.'
+        ? ' — YouTube is bot-blocking this server IP. Configure Sonora Audio Service with SONORA_AUDIO_API_URL.'
         : '';
     throw new Error(`${lastError?.message || 'Could not resolve audio stream'}${hint}`);
   }

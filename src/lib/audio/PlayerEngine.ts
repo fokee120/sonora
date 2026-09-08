@@ -294,12 +294,12 @@ export class PlayerEngine {
 
       this.state.playbackSource = 'cloud';
       if (isYoutubeTrack(track)) {
-        // Cobalt transcodes into a non-seekable HTTP stream. A completed Blob gives
+        // The audio backend transcodes into a non-seekable HTTP stream. A completed Blob gives
         // the native Sonora player reliable metadata and local seeking in Brave too.
         const response = await fetchYoutubeAudio(track, controller.signal);
         const blob = await response.blob();
         controller.signal.throwIfAborted();
-        if (!blob.size) throw new Error('Cobalt returned an empty audio file. Retry the track.');
+        if (!blob.size) throw new Error('Sonora audio backend returned an empty audio file. Retry the track.');
         this.currentObjectUrl = URL.createObjectURL(blob);
         this.audio.src = this.currentObjectUrl;
       } else if (isDriveTrack(track)) {
@@ -318,7 +318,7 @@ export class PlayerEngine {
     } catch (err: any) {
       if (controller.signal.aborted) return;
       if (isYoutubeTrack(track) && err.name === 'NotSupportedError') {
-        err = new Error('This Cobalt audio could not be decoded. Select MP3 in Settings and try again.');
+        err = new Error('This YouTube MP3 could not be decoded. Retry the track.');
       }
       console.error('Error starting playback:', err);
       this.state.isLoading = false;
