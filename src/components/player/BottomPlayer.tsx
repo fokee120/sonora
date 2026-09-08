@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Play,
   Pause,
@@ -20,6 +20,7 @@ import { usePlayer } from '../../hooks/usePlayer.js';
 import { useApp } from '../../context/AppContext.js';
 import { ExpandedPlayerModal } from './ExpandedPlayerModal.js';
 import { QueueDrawer } from './QueueDrawer.js';
+import { playUiSound } from '../../lib/uiFeedback.js';
 
 export const BottomPlayer: React.FC = () => {
   const {
@@ -48,6 +49,7 @@ export const BottomPlayer: React.FC = () => {
 
   const [isExpanded, setIsExpanded] = useState(false);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
 
   if (!currentTrack) return null;
 
@@ -61,12 +63,37 @@ export const BottomPlayer: React.FC = () => {
   };
 
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const volumePercent = (isMuted ? 0 : volume) * 100;
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    const start = touchStart.current;
+    touchStart.current = null;
+    if (!start) return;
+    const touch = e.changedTouches[0];
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    if (dy < -60 && Math.abs(dy) > Math.abs(dx) * 1.2) {
+      playUiSound('tap');
+      setIsExpanded(true);
+      return;
+    }
+    if (Math.abs(dx) > 80 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+      playUiSound('tap');
+      if (dx < 0) next();
+      else previous();
+    }
+  };
 
   return (
     <>
       <div
         id="bottom-player-bar"
         className="bottom-player-bar fixed md:bottom-0 left-0 right-0 z-40 bg-black/80 backdrop-blur-xl border-t border-white/5 select-none shadow-2xl transition"
+        onTouchStart={(e) => {
+          const touch = e.touches[0];
+          touchStart.current = { x: touch.clientX, y: touch.clientY };
+        }}
+        onTouchEnd={handleTouchEnd}
       >
         {error && <p role="alert" className="px-4 py-2 text-xs text-rose-300 bg-rose-950/80 break-words">{error}</p>}
         {/* Scrubber Progress Bar at top edge with Atmospheric Blue Accent */}
@@ -89,7 +116,10 @@ export const BottomPlayer: React.FC = () => {
         <div className="flex items-center justify-between px-4 md:px-8 py-3 max-w-7xl mx-auto gap-3 sm:gap-6">
           {/* Left: Track Details */}
           <div
-            onClick={() => setIsExpanded(true)}
+            onClick={() => {
+              playUiSound('tap');
+              setIsExpanded(true);
+            }}
             className="flex items-center gap-3.5 min-w-0 flex-1 max-w-[240px] md:max-w-xs cursor-pointer group"
           >
             <div className="relative w-12 h-12 rounded-lg overflow-hidden bg-zinc-900 shrink-0 border border-white/10 shadow-lg">
@@ -133,8 +163,9 @@ export const BottomPlayer: React.FC = () => {
             </div>
 
             <button
-              onClick={(e) => {
+                onClick={(e) => {
                 e.stopPropagation();
+                playUiSound(favorite ? 'toggle' : 'success');
                 toggleFavorite(currentTrack.id);
               }}
               className={`p-1.5 transition hidden sm:block ${
@@ -151,7 +182,10 @@ export const BottomPlayer: React.FC = () => {
             <div className="flex items-center gap-2 sm:gap-4">
               {/* Shuffle (desktop) */}
               <button
-                onClick={toggleShuffle}
+                onClick={() => {
+                  playUiSound('toggle');
+                  toggleShuffle();
+                }}
                 className={`p-1.5 rounded-full transition ${
                   shuffle
                     ? 'text-blue-400 bg-blue-500/10'
@@ -164,7 +198,10 @@ export const BottomPlayer: React.FC = () => {
 
               {/* Previous */}
               <button
-                onClick={previous}
+                onClick={() => {
+                  playUiSound('tap');
+                  previous();
+                }}
                 className="p-1.5 text-zinc-400 hover:text-white transition rounded-full"
                 title="Previous track"
               >
@@ -173,7 +210,10 @@ export const BottomPlayer: React.FC = () => {
 
               {/* Play/Pause */}
               <button
-                onClick={togglePlay}
+                onClick={() => {
+                  playUiSound('tap');
+                  togglePlay();
+                }}
                 disabled={isLoading}
                 className="w-10 h-10 rounded-full bg-white text-zinc-950 flex items-center justify-center hover:scale-105 active:scale-95 transition shadow-lg shadow-white/10"
                 title={isPlaying ? 'Pause' : 'Play'}
@@ -189,7 +229,10 @@ export const BottomPlayer: React.FC = () => {
 
               {/* Next */}
               <button
-                onClick={next}
+                onClick={() => {
+                  playUiSound('tap');
+                  next();
+                }}
                 className="p-1.5 text-zinc-400 hover:text-white transition rounded-full"
                 title="Next track"
               >
@@ -198,7 +241,10 @@ export const BottomPlayer: React.FC = () => {
 
               {/* Repeat (desktop) */}
               <button
-                onClick={cycleRepeatMode}
+                onClick={() => {
+                  playUiSound('toggle');
+                  cycleRepeatMode();
+                }}
                 className={`p-1.5 rounded-full transition ${
                   repeatMode !== 'off'
                     ? 'text-blue-400 bg-blue-500/10'
@@ -227,7 +273,10 @@ export const BottomPlayer: React.FC = () => {
             {/* Volume slider (desktop) */}
             <div className="hidden lg:flex items-center gap-2">
               <button
-                onClick={toggleMute}
+                onClick={() => {
+                  playUiSound('toggle');
+                  toggleMute();
+                }}
                 className="p-1 text-zinc-400 hover:text-white transition"
                 title={isMuted ? 'Unmute' : 'Mute'}
               >
@@ -244,14 +293,18 @@ export const BottomPlayer: React.FC = () => {
                 step="0.01"
                 value={isMuted ? 0 : volume}
                 onChange={(e) => setVolume(parseFloat(e.target.value))}
-                className="w-20 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                style={{ '--range-progress': `${volumePercent}%` } as React.CSSProperties}
+                className="range-progress w-20 cursor-pointer"
               />
             </div>
 
             {/* Queue Drawer Button */}
             <button
-              onClick={() => setIsQueueOpen(true)}
-              className="p-2 text-zinc-400 hover:text-white hover:bg-white/5 rounded-lg transition"
+              onClick={() => {
+                playUiSound('tap');
+                setIsQueueOpen(true);
+              }}
+              className="touch-target p-2 text-zinc-400 hover:text-white hover:bg-white/5 rounded-lg transition"
               title="Queue"
             >
               <ListMusic className="w-4 h-4" />
@@ -259,8 +312,11 @@ export const BottomPlayer: React.FC = () => {
 
             {/* Expand Full Player Button */}
             <button
-              onClick={() => setIsExpanded(true)}
-              className="p-2 text-zinc-400 hover:text-white hover:bg-white/5 rounded-lg transition"
+              onClick={() => {
+                playUiSound('tap');
+                setIsExpanded(true);
+              }}
+              className="touch-target p-2 text-zinc-400 hover:text-white hover:bg-white/5 rounded-lg transition"
               title="Expand player"
             >
               <Maximize2 className="w-4 h-4" />

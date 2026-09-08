@@ -47,6 +47,7 @@ interface AppContextType {
   libraryError: string | null;
   refreshLibrary: () => Promise<void>;
   rescanLibrary: () => Promise<void>;
+  addTracksToLibrary: (tracks: Track[]) => Promise<void>;
 
   // Google Drive
   driveUser: User | null;
@@ -335,6 +336,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     await refreshLibrary();
   }, [refreshLibrary]);
+
+  const addTracksToLibrary = useCallback(async (incoming: Track[]) => {
+    if (incoming.length === 0) return;
+    await dbService.saveTracks(incoming);
+    setTracks((previous) => {
+      const byId = new Map(previous.map((track) => [track.id, track]));
+      for (const track of incoming) byId.set(track.id, track);
+      return Array.from(byId.values());
+    });
+  }, []);
 
   // Scan Google Drive audio files and extract metadata (using server-side or client token)
   const scanGoogleDrive = useCallback(async (folderId?: string) => {
@@ -786,6 +797,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         libraryError,
         refreshLibrary,
         rescanLibrary,
+        addTracksToLibrary,
         driveUser,
         isDriveConnected,
         isScanningDrive,

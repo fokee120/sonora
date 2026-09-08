@@ -77,6 +77,16 @@ export async function searchYoutubeMusic(
   return (data.songs || []).map(ytmSongToTrack);
 }
 
+export async function fetchYoutubeTrack(videoId: string, signal?: AbortSignal): Promise<Track> {
+  if (!/^[\w-]{11}$/.test(videoId)) throw new Error('Invalid YouTube video ID.');
+  const res = await fetch(`/api/ytmusic/track/${encodeURIComponent(videoId)}`, { signal });
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new Error(data?.details || data?.error || `Could not read YouTube track (${res.status})`);
+  }
+  return ytmSongToTrack((await res.json()) as YtmSongDto);
+}
+
 const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
 const SEARCH_CACHE_MAX = 30;
 const searchCache = new Map<string, { expiresAt: number; tracks: Track[] }>();

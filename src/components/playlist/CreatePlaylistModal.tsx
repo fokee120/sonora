@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { X, ListMusic, Plus, Search, Check, Sparkles } from 'lucide-react';
+import { X, ListMusic, Plus, Search, Check, Sparkles, Youtube, Loader2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext.js';
-import { Track } from '../../types/index.js';
+import { fetchYoutubeTrack } from '../../lib/ytmusic/youtubeMusic.js';
+import { playUiSound } from '../../lib/uiFeedback.js';
 
 interface CreatePlaylistModalProps {
   isOpen: boolean;
@@ -25,7 +26,7 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
   initialTrackId,
   onCreated,
 }) => {
-  const { tracks, createPlaylist, navigate } = useApp();
+  const { tracks, createPlaylist, navigate, addTracksToLibrary } = useApp();
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -35,6 +36,8 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
   );
   const [searchQuery, setSearchQuery] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isImportingYoutube, setIsImportingYoutube] = useState(false);
+  const [youtubeInput, setYoutubeInput] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const filteredTracks = useMemo(() => {
@@ -51,6 +54,7 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
   if (!isOpen) return null;
 
   const toggleTrack = (id: string) => {
+    playUiSound('toggle');
     setSelectedTrackIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -60,6 +64,41 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
       }
       return next;
     });
+  };
+
+  const extractYoutubeIds = (value: string): string[] => {
+    const ids = new Set<string>();
+    const urlMatches = value.matchAll(/(?:youtu\.be\/|youtube\.com\/(?:watch\?[^#\n\r]*?v=|shorts\/|embed\/))([\w-]{11})/gi);
+    for (const match of urlMatches) ids.add(match[1]);
+    const looseMatches = value.matchAll(/(^|[^\w-])([\w-]{11})(?=$|[^\w-])/g);
+    for (const match of looseMatches) ids.add(match[2]);
+    return Array.from(ids).slice(0, 40);
+  };
+
+  const importYoutubeLinks = async () => {
+    const ids = extractYoutubeIds(youtubeInput);
+    if (ids.length === 0) {
+      setError('Paste one or more YouTube video links or IDs.');
+      return;
+    }
+    setIsImportingYoutube(true);
+    setError(null);
+    try {
+      const imported = await Promise.all(ids.map((id) => fetchYoutubeTrack(id)));
+      await addTracksToLibrary(imported);
+      setSelectedTrackIds((prev) => {
+        const next = new Set(prev);
+        for (const track of imported) next.add(track.id);
+        return next;
+      });
+      if (!title.trim() && imported.length > 1) setTitle('YouTube Mix');
+      setYoutubeInput('');
+      playUiSound('success');
+    } catch (err: any) {
+      setError(err?.message || 'Could not import YouTube tracks.');
+    } finally {
+      setIsImportingYoutube(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -74,6 +113,7 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
     setError(null);
 
     try {
+      playUiSound('success');
       const newPl = await createPlaylist(
         cleanTitle,
         description.trim() || undefined,
@@ -117,8 +157,11 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
             </div>
           </div>
           <button
-            onClick={onClose}
-            className="p-1.5 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition"
+            onClick={() => {
+              playUiSound('tap');
+              onClose();
+            }}
+            className="touch-target p-1.5 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition"
           >
             <X className="w-4 h-4" />
           </button>
@@ -180,7 +223,8 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
                   <button
                     key={theme.id}
                     type="button"
-                    onClick={() => setSelectedTheme(theme)}
+                onClick={() => setSelectedTheme(theme)}
+                    onMouseDown={() => playUiSound('toggle')}
                     className={`h-9 rounded-xl bg-gradient-to-tr ${theme.gradient} transition relative flex items-center justify-center border ${
                       isSelected ? 'border-white scale-105 shadow-md shadow-white/10 ring-2 ring-indigo-500/50' : 'border-transparent opacity-70 hover:opacity-100'
                     }`}
@@ -208,6 +252,29 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
                   Clear selection
                 </button>
               )}
+            </div>
+
+            <div className="space-y-2 rounded-xl bg-zinc-950/50 border border-zinc-800/80 p-3">
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                <Youtube className="w-3.5 h-3.5 text-red-400" />
+                <span>Import YouTube Links</span>
+              </div>
+              <textarea
+                rows={3}
+                value={youtubeInput}
+                onChange={(e) => setYoutubeInput(e.target.value)}
+                placeholder="Paste YouTube video links or IDs from a playlist, one per line"
+                className="w-full px-3 py-2 text-xs bg-zinc-950 border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-hidden focus:border-red-500 transition resize-none"
+              />
+              <button
+                type="button"
+                onClick={importYoutubeLinks}
+                disabled={isImportingYoutube || !youtubeInput.trim()}
+                className="touch-target flex items-center gap-2 px-3 py-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-200 border border-red-500/30 text-xs font-semibold transition active:scale-95 disabled:opacity-50"
+              >
+                {isImportingYoutube ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                <span>{isImportingYoutube ? 'Importing...' : 'Add YouTube Tracks'}</span>
+              </button>
             </div>
 
             {/* Track Search Bar */}
@@ -267,7 +334,10 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-zinc-800/80 bg-zinc-950/60">
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => {
+              playUiSound('tap');
+              onClose();
+            }}
             className="px-4 py-2 text-xs font-semibold text-zinc-400 hover:text-white transition rounded-xl"
           >
             Cancel

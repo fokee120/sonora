@@ -17,6 +17,7 @@ import { useApp } from '../../context/AppContext.js';
 import { usePlayer } from '../../hooks/usePlayer.js';
 import { offlineManager } from '../../lib/offline/OfflineManager.js';
 import { isYoutubeTrack } from '../../lib/ytmusic/youtubeMusic.js';
+import { playUiSound } from '../../lib/uiFeedback.js';
 
 interface TrackRowProps {
   track: Track;
@@ -47,6 +48,7 @@ export const TrackRow: React.FC<TrackRowProps> = ({
 
   const [showMenu, setShowMenu] = useState(false);
   const [showPlaylistsSubmenu, setShowPlaylistsSubmenu] = useState(false);
+  const [downloadPulse, setDownloadPulse] = useState(0);
 
   const isCurrent = currentTrack?.id === track.id;
   const isCurrentlyPlaying = isCurrent && isPlaying;
@@ -58,6 +60,7 @@ export const TrackRow: React.FC<TrackRowProps> = ({
 
   const handlePlayClick = (e: React.MouseEvent) => {
     e.stopPropagation();
+    playUiSound('tap');
     if (isCurrent) {
       togglePlay();
     } else {
@@ -67,6 +70,8 @@ export const TrackRow: React.FC<TrackRowProps> = ({
 
   const handleDownloadToggle = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    playUiSound(downloaded ? 'toggle' : 'download');
+    setDownloadPulse((value) => value + 1);
     if (downloaded) {
       await removeDownload(track.id);
     } else if (!downloading) {
@@ -193,17 +198,19 @@ export const TrackRow: React.FC<TrackRowProps> = ({
           </div>
         ) : downloaded ? (
           <button
+            key={`downloaded-${downloadPulse}`}
             onClick={handleDownloadToggle}
-            className="p-1.5 text-emerald-400 hover:text-rose-400 rounded-lg transition"
+            className="download-pop p-1.5 text-emerald-400 hover:text-rose-400 rounded-lg transition active:scale-90"
             title="Downloaded offline. Click to remove from local storage."
           >
             <CheckCircle2 className="w-4 h-4" />
           </button>
         ) : (
           <button
+            key={`download-${downloadPulse}`}
             onClick={handleDownloadToggle}
             disabled={!isOnline}
-            className={`p-1.5 text-zinc-500 hover:text-white rounded-lg transition ${
+            className={`download-pop p-1.5 text-zinc-500 hover:text-white rounded-lg transition active:scale-90 ${
               !isOnline ? 'opacity-30 cursor-not-allowed' : 'opacity-0 group-hover:opacity-100'
             }`}
             title={isOnline ? (downloadState?.status === 'failed' ? 'Retry download' : 'Download for offline playback') : 'Connect online to download'}
@@ -216,6 +223,7 @@ export const TrackRow: React.FC<TrackRowProps> = ({
         <button
           onClick={(e) => {
             e.stopPropagation();
+            playUiSound(favorite ? 'toggle' : 'success');
             toggleFavorite(track.id);
           }}
           className={`p-1.5 transition ${
@@ -252,7 +260,8 @@ export const TrackRow: React.FC<TrackRowProps> = ({
               onClick={(e) => e.stopPropagation()}
             >
               <button
-                onClick={() => {
+              onClick={() => {
+                  playUiSound('tap');
                   playNext(track);
                   setShowMenu(false);
                 }}
@@ -263,7 +272,8 @@ export const TrackRow: React.FC<TrackRowProps> = ({
               </button>
 
               <button
-                onClick={() => {
+              onClick={() => {
+                  playUiSound('tap');
                   addToQueue(track);
                   setShowMenu(false);
                 }}
@@ -274,7 +284,10 @@ export const TrackRow: React.FC<TrackRowProps> = ({
               </button>
 
               <button
-                onClick={() => setShowPlaylistsSubmenu(!showPlaylistsSubmenu)}
+                onClick={() => {
+                  playUiSound('toggle');
+                  setShowPlaylistsSubmenu(!showPlaylistsSubmenu);
+                }}
                 className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-white/10 hover:text-white transition"
               >
                 <div className="flex items-center gap-2">
@@ -293,6 +306,7 @@ export const TrackRow: React.FC<TrackRowProps> = ({
                       <button
                         key={pl.id}
                         onClick={() => {
+                          playUiSound('success');
                           addTrackToPlaylist(pl.id, track.id);
                           setShowMenu(false);
                         }}
@@ -308,6 +322,7 @@ export const TrackRow: React.FC<TrackRowProps> = ({
               {downloaded && (
                 <button
                   onClick={() => {
+                    playUiSound('toggle');
                     removeDownload(track.id);
                     setShowMenu(false);
                   }}
