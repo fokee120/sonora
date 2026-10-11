@@ -1,7 +1,7 @@
 import { Track, PlayerState, RepeatMode, QueueItem } from '../../types/index.js';
 import { offlineManager } from '../offline/OfflineManager.js';
 import { dbService } from '../db.js';
-import { cloudStreamUrl, fetchDriveAudio, isDriveTrack, youtubeStreamUrl } from './audioSource.js';
+import { cloudStreamUrl, fetchDriveAudio, isDriveTrack, youtubeStreamUrl, bridgeHeaders } from './audioSource.js';
 import { isYoutubeTrack } from '../ytmusic/youtubeMusic.js';
 import { logPerf, perfNow } from '../perf.js';
 
@@ -393,7 +393,7 @@ export class PlayerEngine {
       } else {
         // If resuming a YouTube track, wake the hidden Chromium bridge too
         if (isYoutubeTrack(this.state.currentTrack)) {
-          fetch('/api/ytmusic/bridge/resume', { method: 'POST' }).catch(() => {});
+          fetch('/api/ytmusic/bridge/resume', { method: 'POST', headers: bridgeHeaders() }).catch(() => {});
         }
         try {
           await this.audio.play();
@@ -412,7 +412,7 @@ export class PlayerEngine {
     // If pausing a YouTube track, pause the hidden Chromium bridge too
     // so it doesn't keep playing (and buffering) in the background.
     if (this.state.currentTrack && isYoutubeTrack(this.state.currentTrack)) {
-      fetch('/api/ytmusic/bridge/pause', { method: 'POST' }).catch(() => {});
+      fetch('/api/ytmusic/bridge/pause', { method: 'POST', headers: bridgeHeaders() }).catch(() => {});
     }
     this.audio.pause();
   }
@@ -431,7 +431,7 @@ export class PlayerEngine {
     if (this.state.currentTrack && isYoutubeTrack(this.state.currentTrack)) {
       fetch('/api/ytmusic/bridge/seek', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...bridgeHeaders() },
         body: JSON.stringify({ position: timeInSeconds }),
       }).catch(() => {});
       this.state.currentTime = timeInSeconds;

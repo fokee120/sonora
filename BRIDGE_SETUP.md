@@ -73,6 +73,16 @@ headless — no window, no tab, completely invisible.
 - Drive/GCS audio — untouched
 - The API endpoint URLs (`/api/ytmusic/stream/:videoId`, `/api/ytmusic/download/:videoId`) — unchanged, so nothing else breaks
 
+## Multi-user support
+
+Each browser gets a unique session ID (stored in localStorage). The bridge
+gives every session its own isolated Chromium context, so multiple people can
+play different songs simultaneously without interfering.
+
+- Sessions idle for 15 minutes are cleaned up automatically
+- Max 10 concurrent sessions (oldest idle evicted first)
+- Each session uses ~100-200MB RAM — plan server memory accordingly
+
 ## Known limitations
 
 - **Downloads are real-time.** Capturing a 4-minute song takes 4 minutes. This is inherent to the bridge approach — you're recording what the real player plays.

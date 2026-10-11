@@ -113,11 +113,24 @@ app.get('/api/ytmusic/track/:videoId', async (req, res) => {
   }
 });
 
-// Bridge playback controls — keeps the hidden Chromium in sync with the
-// frontend's <audio> element. The frontend calls these on pause/resume.
+// Bridge playback controls — keeps each user's hidden Chromium session in sync
+// with their frontend's <audio> element. Session ID isolates concurrent users:
+// each gets their own browser context playing independently.
+// Session comes from X-Session-Id header or ?session= query param
+// (query param needed for <audio src> which can't set headers).
+function getSessionId(req: express.Request): string {
+  const fromHeader = req.headers['x-session-id'];
+  const fromQuery = req.query.session;
+  const id = (Array.isArray(fromHeader) ? fromHeader[0] : fromHeader)
+    || (typeof fromQuery === 'string' ? fromQuery : '')
+    || 'default';
+  // Sanitize: alphanumeric + dashes only, max 64 chars
+  return id.replace(/[^a-zA-Z0-9-]/g, '').slice(0, 64) || 'default';
+}
+
 app.post('/api/ytmusic/bridge/pause', async (req, res) => {
   try {
-    await chromiumBridge.pause();
+    await chromiumBridge.pause(getSessionId(req));
     res.json({ ok: true });
   } catch (err: any) {
     res.status(502).json({ ok: false, error: err?.message });
@@ -126,7 +139,7 @@ app.post('/api/ytmusic/bridge/pause', async (req, res) => {
 
 app.post('/api/ytmusic/bridge/resume', async (req, res) => {
   try {
-    await chromiumBridge.resume();
+    await chromiumBridge.resume(getSessionId(req));
     res.json({ ok: true });
   } catch (err: any) {
     res.status(502).json({ ok: false, error: err?.message });
@@ -135,7 +148,7 @@ app.post('/api/ytmusic/bridge/resume', async (req, res) => {
 
 app.get('/api/ytmusic/bridge/now-playing', async (req, res) => {
   try {
-    const state = await chromiumBridge.nowPlaying();
+    const state = await chromiumBridge.nowPlaying(getSessionId(req));
     res.json({ ok: true, nowPlaying: state });
   } catch (err: any) {
     res.status(502).json({ ok: false, error: err?.message });
@@ -148,11 +161,15 @@ app.post('/api/ytmusic/bridge/seek', async (req, res) => {
     if (!Number.isFinite(position) || position < 0) {
       return res.status(400).json({ ok: false, error: 'Invalid position' });
     }
-    await chromiumBridge.seek(position);
+    await chromiumBridge.seek(getSessionId(req), position);
     res.json({ ok: true });
   } catch (err: any) {
     res.status(502).json({ ok: false, error: err?.message });
   }
+});
+
+app.get('/api/ytmusic/bridge/sessions', async (req, res) => {
+  res.json({ ok: true, activeSessions: chromiumBridge.sessionCount });
 });
 
 // Native-player streaming and offline downloads via the hidden Chromium bridge.
@@ -172,13 +189,16 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
 
     res.setHeader('X-Audio-Via', 'sonora-chromium-bridge');
 
+    // Each user gets an isolated browser session (see getSessionId above).
+    const sessionId = getSessionId(req);
+
     // iOS Safari/PWA cannot play WebM/Opus — serve MP3 (transcoded via ffmpeg).
     // Detect via User-Agent; also allow explicit ?format=mp3 override.
     const userAgent = req.headers['user-agent'] || '';
     const isIOS = /iPad|iPhone|iPod/.test(userAgent);
     const wantsMp3 = req.query.format === 'mp3' || isIOS;
     const format = wantsMp3 ? 'mp3' : 'webm';
-    const mimeType = format === 'mp3' ? 'audio/mpeg' : await chromiumBridge.getMimeType().catch(() => 'audio/webm');
+    const mimeType = format === 'mp3' ? 'audio/mpeg' : await chromiumBridge.getMimeType(sessionId).catch(() => 'audio/webm');
 
     res.setHeader('Content-Type', mimeType);
     res.setHeader('X-Audio-Format', format);
@@ -199,7 +219,7 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
     // Pipe bridge audio chunks directly to the HTTP response
     async function* chunks() {
       try {
-        for await (const chunk of chromiumBridge.play(videoId, controller.signal, format)) {
+        for await (const chunk of chromiumBridge.play(sessionId, videoId, controller.signal, format)) {
           yield chunk;
         }
       } catch (err: any) {
@@ -208,7 +228,7 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
       }
     }
 
-    logServerPerf('chromium bridge first byte', Date.now(), { videoId, isDownload, format });
+    logServerPerf('chromium bridge first byte', Date.now(), { videoId, isDownload, format, sessionId });
     await pipeline(Readable.from(chunks()), res);
   } catch (err: any) {
     console.error('YT Music bridge error:', err);

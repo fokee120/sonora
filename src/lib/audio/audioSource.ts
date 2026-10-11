@@ -2,6 +2,29 @@ import type { Track } from '../../types/index.js';
 import { getDriveAccessToken } from '../googleAuth.js';
 import { isYoutubeTrack, youtubeVideoId } from '../ytmusic/youtubeMusic.js';
 
+/**
+ * Per-client session ID for the Chromium bridge. Each browser gets a unique
+ * ID (stored in localStorage) so the server can give concurrent users
+ * isolated playback sessions — two people can play different songs at once.
+ */
+export function getBridgeSessionId(): string {
+  const KEY = 'sonora-bridge-session';
+  try {
+    let id = localStorage.getItem(KEY);
+    if (!id) {
+      id = 's-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem(KEY, id);
+    }
+    return id;
+  } catch {
+    return 's-fallback-' + Math.random().toString(36).slice(2);
+  }
+}
+
+export function bridgeHeaders(): Record<string, string> {
+  return { 'X-Session-Id': getBridgeSessionId() };
+}
+
 export function isDriveTrack(track: Track): boolean {
   return track.id.startsWith('gdrive:') || track.cloudKey.startsWith('gdrive://');
 }
@@ -9,13 +32,15 @@ export function isDriveTrack(track: Track): boolean {
 export function youtubeStreamUrl(track: Track): string {
   const videoId = youtubeVideoId(track);
   if (!/^[\w-]{11}$/.test(videoId)) throw new Error('Invalid YouTube track. Search for it again.');
-  return `/api/ytmusic/stream/${encodeURIComponent(videoId)}`;
+  // Session ID as query param (<audio src> can't set headers) — isolates
+  // this user's playback from other concurrent users on the bridge.
+  return `/api/ytmusic/stream/${encodeURIComponent(videoId)}?session=${encodeURIComponent(getBridgeSessionId())}`;
 }
 
 export function youtubeDownloadUrl(track: Track): string {
   const videoId = youtubeVideoId(track);
   if (!/^[\w-]{11}$/.test(videoId)) throw new Error('Invalid YouTube track. Search for it again.');
-  return `/api/ytmusic/download/${encodeURIComponent(videoId)}`;
+  return `/api/ytmusic/download/${encodeURIComponent(videoId)}?session=${encodeURIComponent(getBridgeSessionId())}`;
 }
 
 export function driveMediaUrl(track: Track): string {
