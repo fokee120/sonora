@@ -391,6 +391,10 @@ export class PlayerEngine {
       if (!this.audio.src || this.audio.error) {
         await this.playTrack(this.state.currentTrack);
       } else {
+        // If resuming a YouTube track, wake the hidden Chromium bridge too
+        if (isYoutubeTrack(this.state.currentTrack)) {
+          fetch('/api/ytmusic/bridge/resume', { method: 'POST' }).catch(() => {});
+        }
         try {
           await this.audio.play();
         } catch (err: any) {
@@ -405,6 +409,11 @@ export class PlayerEngine {
   }
 
   public pause(): void {
+    // If pausing a YouTube track, pause the hidden Chromium bridge too
+    // so it doesn't keep playing (and buffering) in the background.
+    if (this.state.currentTrack && isYoutubeTrack(this.state.currentTrack)) {
+      fetch('/api/ytmusic/bridge/pause', { method: 'POST' }).catch(() => {});
+    }
     this.audio.pause();
   }
 
@@ -417,6 +426,18 @@ export class PlayerEngine {
   }
 
   public seek(timeInSeconds: number): void {
+    // For YouTube bridge tracks, the audio is a live capture stream without a
+    // seekable timeline — tell the hidden Chromium to seek instead.
+    if (this.state.currentTrack && isYoutubeTrack(this.state.currentTrack)) {
+      fetch('/api/ytmusic/bridge/seek', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ position: timeInSeconds }),
+      }).catch(() => {});
+      this.state.currentTime = timeInSeconds;
+      this.notifyState();
+      return;
+    }
     const duration = this.audio.duration;
     if (Number.isFinite(duration) && duration > 0) {
       const clamped = Math.max(0, Math.min(timeInSeconds, duration));

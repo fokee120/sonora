@@ -4,6 +4,7 @@ import { pipeline } from 'stream/promises';
 import { youtubeMusicClient } from './YoutubeMusicClient.js';
 import { matchingUploads } from './matchingUploads.js';
 import { audioBackendService } from './AudioBackendService.js';
+import { chromiumBridge } from '../bridge/ChromiumBridge.js';
 
 const app = express();
 app.use(express.json());
@@ -54,6 +55,7 @@ app.get('/api/ytmusic/status', (req, res) => {
   res.json({
     searchAvailable: true,
     audioBackend: audioBackendService.getStatus(),
+    bridge: { mode: 'chromium', description: 'Hidden Chromium drives the real YouTube Music web app' },
   });
 });
 
@@ -111,48 +113,108 @@ app.get('/api/ytmusic/track/:videoId', async (req, res) => {
   }
 });
 
-// Native-player streaming and offline downloads share the same MP3 backend.
+// Bridge playback controls — keeps the hidden Chromium in sync with the
+// frontend's <audio> element. The frontend calls these on pause/resume.
+app.post('/api/ytmusic/bridge/pause', async (req, res) => {
+  try {
+    await chromiumBridge.pause();
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: err?.message });
+  }
+});
+
+app.post('/api/ytmusic/bridge/resume', async (req, res) => {
+  try {
+    await chromiumBridge.resume();
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: err?.message });
+  }
+});
+
+app.get('/api/ytmusic/bridge/now-playing', async (req, res) => {
+  try {
+    const state = await chromiumBridge.nowPlaying();
+    res.json({ ok: true, nowPlaying: state });
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: err?.message });
+  }
+});
+
+app.post('/api/ytmusic/bridge/seek', async (req, res) => {
+  try {
+    const position = Number(req.body?.position);
+    if (!Number.isFinite(position) || position < 0) {
+      return res.status(400).json({ ok: false, error: 'Invalid position' });
+    }
+    await chromiumBridge.seek(position);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: err?.message });
+  }
+});
+
+// Native-player streaming and offline downloads via the hidden Chromium bridge.
+// The bridge plays the REAL music.youtube.com in a headless browser and captures
+// audio directly from the page — no InnerTube spoofing, no PO tokens to manage.
 app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], async (req, res) => {
   const controller = new AbortController();
   const cancel = () => controller.abort();
   res.on('close', cancel);
-  const timeout = setTimeout(cancel, 300000);
+  const timeout = setTimeout(cancel, 600000); // 10 min max (long songs + capture overhead)
+  const isDownload = req.path.includes('/download/');
   try {
     const { videoId } = req.params;
     if (!VALID_YT_VIDEO_ID.test(videoId)) {
       return res.status(400).json({ error: 'Invalid YouTube video ID' });
     }
 
-    res.setHeader('X-Download-Via', 'sonora-audio-service');
-    try {
-      await proxyAudioBackendResponse(res, videoId, controller.signal);
-    } catch (error: any) {
-      // Retry only before any bytes are sent, and only for the known empty-upload failure.
-      if (error?.code !== 'EMPTY_AUDIO' || res.headersSent || res.destroyed) throw error;
-      const title = typeof req.query.title === 'string' ? req.query.title.slice(0, 300).trim() : '';
-      const artist = typeof req.query.artist === 'string' ? req.query.artist.slice(0, 200).trim() : '';
-      const durationSeconds = Number(req.query.duration);
-      if (!title || !artist || !Number.isFinite(durationSeconds) || durationSeconds <= 0) throw error;
-      const original = { videoId, title, artist, durationSeconds };
-      const results = await youtubeMusicClient.search(`${artist} ${title}`, 'videos');
-      for (const candidate of matchingUploads(original, results.songs).slice(0, 2)) {
-        if (res.destroyed) return;
-        try {
-          res.setHeader('X-Audio-Video-Id', candidate.videoId);
-          await proxyAudioBackendResponse(res, candidate.videoId, controller.signal);
-          return;
-        } catch (retryError: any) {
-          if (res.headersSent || res.destroyed) throw retryError;
-          res.removeHeader('X-Audio-Video-Id');
-        }
-      }
-      throw new Error('Sonora Audio Service returned empty audio and no matching playable upload was found. Try another search result.');
+    res.setHeader('X-Audio-Via', 'sonora-chromium-bridge');
+
+    // iOS Safari/PWA cannot play WebM/Opus — serve MP3 (transcoded via ffmpeg).
+    // Detect via User-Agent; also allow explicit ?format=mp3 override.
+    const userAgent = req.headers['user-agent'] || '';
+    const isIOS = /iPad|iPhone|iPod/.test(userAgent);
+    const wantsMp3 = req.query.format === 'mp3' || isIOS;
+    const format = wantsMp3 ? 'mp3' : 'webm';
+    const mimeType = format === 'mp3' ? 'audio/mpeg' : await chromiumBridge.getMimeType().catch(() => 'audio/webm');
+
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('X-Audio-Format', format);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+
+    if (isDownload) {
+      // For downloads, accumulate the full stream then serve as a file.
+      // Note: capture is real-time, so this takes as long as the song.
+      const title = typeof req.query.title === 'string' ? req.query.title.slice(0, 100).trim() : videoId;
+      const safeTitle = title.replace(/[^a-zA-Z0-9-_ ]/g, '').trim() || videoId;
+      const ext = format === 'mp3' ? 'mp3' : 'webm';
+      res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}.${ext}"`);
     }
+
+    res.status(200);
+
+    // Pipe bridge audio chunks directly to the HTTP response
+    async function* chunks() {
+      try {
+        for await (const chunk of chromiumBridge.play(videoId, controller.signal, format)) {
+          yield chunk;
+        }
+      } catch (err: any) {
+        if (controller.signal.aborted) return;
+        throw err;
+      }
+    }
+
+    logServerPerf('chromium bridge first byte', Date.now(), { videoId, isDownload, format });
+    await pipeline(Readable.from(chunks()), res);
   } catch (err: any) {
-    console.error('YT Music download error:', err);
+    console.error('YT Music bridge error:', err);
     if (!res.headersSent) {
       res.status(err?.status || 502).json({
-        error: err?.code || 'youtube_audio_backend_failed',
+        error: err?.code || 'chromium_bridge_failed',
         details: err?.message,
       });
     }
