@@ -25,8 +25,6 @@ export const Sidebar: React.FC = () => {
     openCreatePlaylist,
     displayTracks,
     storageInfo,
-    authSession,
-    logout,
   } = useApp();
 
   const [isCreatingPlaylist, setIsCreatingPlaylist] = useState(false);
@@ -220,24 +218,6 @@ export const Sidebar: React.FC = () => {
           </div>
         )}
 
-        {/* User Account / Auth status */}
-        {authSession.isAuthenticated && authSession.user ? (
-          <div className="flex items-center justify-between px-2 pt-1 text-xs text-zinc-400">
-            <div className="flex items-center gap-2 truncate">
-              <div className="w-6 h-6 rounded-full bg-white/10 border border-white/10 flex items-center justify-center text-zinc-300">
-                <User className="w-3.5 h-3.5" />
-              </div>
-              <span className="truncate text-zinc-300 font-medium">{authSession.user.name}</span>
-            </div>
-            <button
-              onClick={() => logout()}
-              className="p-1 hover:text-white text-zinc-500 rounded transition"
-              title="Log out"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        ) : null}
       </div>
     </aside>
   );

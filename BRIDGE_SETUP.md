@@ -70,7 +70,7 @@ headless — no window, no tab, completely invisible.
 
 - Search still uses InnerTube (`YoutubeMusicClient.ts`) — search doesn't need PO tokens, so it works fine
 - All React views, library, playlists, offline storage — untouched
-- Drive/GCS audio — untouched
+- Drive audio — untouched
 - The API endpoint URLs (`/api/ytmusic/stream/:videoId`, `/api/ytmusic/download/:videoId`) — unchanged, so nothing else breaks
 
 ## Multi-user support

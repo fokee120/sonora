@@ -96,9 +96,23 @@ export const BottomPlayer: React.FC = () => {
         onTouchEnd={handleTouchEnd}
       >
         {error && <p role="alert" className="px-4 py-2 text-xs text-rose-300 bg-rose-950/80 break-words">{error}</p>}
+        {isLoading && <p role="status" className="px-4 pt-1 text-xs text-zinc-400">{isPlaying ? 'Buffering…' : 'Loading audio…'}</p>}
         {/* Scrubber Progress Bar at top edge with Atmospheric Blue Accent */}
         <div
           className="relative w-full h-1 bg-white/10 cursor-pointer group hover:h-2 transition-all"
+          role="slider"
+          tabIndex={duration > 0 ? 0 : -1}
+          aria-label="Seek"
+          aria-valuemin={0}
+          aria-valuemax={duration}
+          aria-valuenow={Math.min(currentTime, duration)}
+          aria-valuetext={formatTime(currentTime)}
+          onKeyDown={(e) => {
+            if (!duration) return;
+            const position = e.key === 'Home' ? 0 : e.key === 'End' ? duration
+              : e.key === 'ArrowRight' ? currentTime + 5 : e.key === 'ArrowLeft' ? currentTime - 5 : null;
+            if (position !== null) { e.preventDefault(); seek(position); }
+          }}
           onClick={(e) => {
             const rect = e.currentTarget.getBoundingClientRect();
             const pct = (e.clientX - rect.left) / rect.width;
@@ -151,7 +165,7 @@ export const BottomPlayer: React.FC = () => {
                 ) : (
                   <span
                     className="shrink-0 px-1 py-0.2 text-[9px] rounded bg-blue-950/70 text-blue-400 border border-blue-800/40 font-medium hidden sm:inline"
-                    title="Streaming from Google Cloud Storage"
+                    title="Streaming audio"
                   >
                     Cloud
                   </span>
@@ -214,9 +228,9 @@ export const BottomPlayer: React.FC = () => {
                   playUiSound('tap');
                   togglePlay();
                 }}
-                disabled={isLoading}
+                aria-label={isLoading ? 'Cancel loading' : isPlaying ? 'Pause' : error ? 'Retry playback' : 'Play'}
                 className="w-10 h-10 rounded-full bg-white text-zinc-950 flex items-center justify-center hover:scale-105 active:scale-95 transition shadow-lg shadow-white/10"
-                title={isPlaying ? 'Pause' : 'Play'}
+                title={isLoading ? 'Cancel loading' : isPlaying ? 'Pause' : error ? 'Retry playback' : 'Play'}
               >
                 {isLoading ? (
                   <Loader2 className="w-5 h-5 animate-spin text-zinc-900" />

@@ -3,6 +3,7 @@ import { dbService } from '../db.js';
 import { IAudioStorage } from './IAudioStorage.js';
 import { IndexedDBAudioStorage } from './IndexedDBAudioStorage.js';
 import { fetchTrackAudio } from '../audio/audioSource.js';
+import { validateAudioBlob } from './audioCompleteness.js';
 
 type Listener = () => void;
 
@@ -72,6 +73,23 @@ export class OfflineManager {
   public isTrackDownloaded(trackId: string): boolean {
     const state = this.downloadsCache.get(trackId);
     return state?.status === 'completed';
+  }
+
+  /** Check legacy files lazily, retaining bytes and all unrelated downloads. */
+  public async validateLocalAudio(track: Track, blob: Blob, signal?: AbortSignal): Promise<void> {
+    try {
+      await validateAudioBlob(blob, track, signal);
+    } catch (error) {
+      signal?.throwIfAborted();
+      const existing = this.downloadsCache.get(track.id);
+      if (existing?.status === 'completed') {
+        const failed: DownloadState = { ...existing, status: 'failed', progress: 0, error: error instanceof Error ? error.message : 'Offline audio could not be verified. Retry the download.' };
+        this.downloadsCache.set(track.id, failed);
+        await dbService.saveDownloadState(failed);
+        this.notify();
+      }
+      throw error;
+    }
   }
 
   public isTrackDownloading(trackId: string): boolean {
@@ -199,16 +217,23 @@ export class OfflineManager {
     };
 
     try {
-      await updateState({ status: 'downloading', progress: 5 });
+      await updateState({ status: 'downloading', progress: 0, phase: 'preparing', recordedSeconds: 0, sourceDuration: 0 });
 
-      const audioRes = await fetchTrackAudio(track, controller.signal);
+      const audioRes = await fetchTrackAudio(track, controller.signal, async progress => {
+        if (!controller.signal.aborted) await updateState(progress);
+      });
+      controller.signal.throwIfAborted();
+      await updateState({ phase: 'transferring' });
       const mimeType = audioRes.headers.get('content-type') || 'application/octet-stream';
 
       const contentLength = audioRes.headers.get('content-length');
-      const totalBytes = contentLength ? parseInt(contentLength, 10) : track.sizeBytes || 4000000;
+      const totalBytes = contentLength ? parseInt(contentLength, 10) : 0;
 
       if (!audioRes.body) {
         const blob = await audioRes.blob();
+        await updateState({ phase: 'validating', progress: 98 });
+        await validateAudioBlob(blob, track, controller.signal, audioRes);
+        controller.signal.throwIfAborted();
         await this.audioStorage.save(track.id, blob, blob.type || 'audio/mpeg');
         await updateState({
           status: 'completed',
@@ -231,7 +256,8 @@ export class OfflineManager {
         chunks.push(value);
         receivedBytes += value.length;
 
-        const progress = Math.min(98, Math.round((receivedBytes / totalBytes) * 100));
+        const baseline = this.downloadsCache.get(track.id)?.progress || 0;
+        const progress = totalBytes > 0 ? Math.max(baseline, Math.min(98, Math.round((receivedBytes / totalBytes) * 98))) : baseline;
         await updateState({
           progress,
           bytesDownloaded: receivedBytes,
@@ -244,7 +270,11 @@ export class OfflineManager {
       const combinedBlob = new Blob(chunks, { type: mimeType });
       controller.signal.throwIfAborted();
 
-      // Step 3: Store raw binary Blob inside IndexedDB
+      await updateState({ phase: 'validating', progress: 98 });
+      await validateAudioBlob(combinedBlob, track, controller.signal, audioRes);
+      controller.signal.throwIfAborted();
+
+      // Store only after checking the actual downloaded audio.
       await this.audioStorage.save(track.id, combinedBlob, mimeType);
 
       // Step 4: Finalize metadata

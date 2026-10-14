@@ -1,4 +1,4 @@
-export type TrackSource = 'gcs' | 'gdrive' | 'ytmusic';
+export type TrackSource = 'gdrive' | 'ytmusic';
 
 export interface Track {
   id: string;
@@ -59,6 +59,11 @@ export interface DownloadState {
   trackId: string;
   status: DownloadStatus;
   progress: number; // 0 - 100
+  phase?: 'preparing' | 'recording' | 'fetching' | 'finalizing' | 'transferring' | 'validating';
+  sourceBytesDownloaded?: number;
+  sourceTotalBytes?: number;
+  recordedSeconds?: number;
+  sourceDuration?: number;
   bytesDownloaded: number;
   totalBytes: number;
   error?: string;
@@ -111,16 +116,6 @@ export interface StorageQuotaInfo {
   persisted: boolean;
   trackCount: number;
   downloadSizeMB: number;
-}
-
-export interface AuthSession {
-  user: {
-    email: string;
-    name?: string;
-  } | null;
-  isAuthenticated: boolean;
-  authRequired: boolean;
-  authorizedEmails: string[];
 }
 
 export type ViewRoute =

@@ -127,6 +127,7 @@ export async function cachedSearchYoutubeMusic(
 }
 
 export interface YtmStatus {
+  bridge?: { mode: string; description?: string };
   searchAvailable: boolean;
   audioBackend: {
     configured: boolean;

@@ -1,16 +1,24 @@
 import express from 'express';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
+import { createReadStream } from 'node:fs';
 import { youtubeMusicClient } from './YoutubeMusicClient.js';
 import { matchingUploads } from './matchingUploads.js';
 import { audioBackendService } from './AudioBackendService.js';
 import { chromiumBridge } from '../bridge/ChromiumBridge.js';
+import { directDownloader } from '../bridge/DirectDownloader.js';
+
+import { beginDownloadJob, readDownloadJob, reportDownloadJob, updateDownloadJob, validDownloadRequestId } from '../bridge/DownloadJobs.js';
 
 const app = express();
 app.use(express.json());
 
 const VALID_YT_VIDEO_ID = /^[\w-]{11}$/;
 const DEBUG_PERF = process.env.SONORA_DEBUG_PERF === 'true';
+// One process-wide pool, independent of optional progress IDs or browser sessions.
+// Hold slots through finalization, response streaming, and artifact disposal.
+const MAX_CONCURRENT_DIRECT_DOWNLOADS = 2;
+let activeDirectDownloads = 0;
 
 function logServerPerf(label: string, startedAt: number, extra?: Record<string, unknown>): void {
   if (!DEBUG_PERF) return;
@@ -128,6 +136,16 @@ function getSessionId(req: express.Request): string {
   return id.replace(/[^a-zA-Z0-9-]/g, '').slice(0, 64) || 'default';
 }
 
+app.post('/api/ytmusic/bridge/prepare', async (req, res) => {
+  const started = Date.now();
+  try {
+    await chromiumBridge.prepare(getSessionId(req));
+    res.json({ ok: true, elapsedMs: Date.now() - started });
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: err?.message || 'Bridge preparation failed' });
+  }
+});
+
 app.post('/api/ytmusic/bridge/pause', async (req, res) => {
   try {
     await chromiumBridge.pause(getSessionId(req));
@@ -172,12 +190,35 @@ app.get('/api/ytmusic/bridge/sessions', async (req, res) => {
   res.json({ ok: true, activeSessions: chromiumBridge.sessionCount });
 });
 
+function getDownloadSessionId(req: express.Request): string | undefined {
+  const id = req.headers['x-session-id'] ?? req.query.session;
+  return typeof id === 'string' && /^[a-zA-Z0-9-]{1,64}$/.test(id) && id !== 'default' ? id : undefined;
+}
+
+app.get('/api/ytmusic/download-status/:requestId', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!validDownloadRequestId(req.params.requestId)) return res.status(400).json({ error: 'Invalid download request identifier' });
+  const session = getDownloadSessionId(req);
+  if (!session) return res.status(400).json({ error: 'Invalid download session' });
+  const state = readDownloadJob(req.params.requestId, session);
+  if (!state) return res.status(404).json({ error: 'Download not found' });
+  res.json(state);
+});
+
 // Native-player streaming and offline downloads via the hidden Chromium bridge.
 // The bridge plays the REAL music.youtube.com in a headless browser and captures
 // audio directly from the page — no InnerTube spoofing, no PO tokens to manage.
 app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], async (req, res) => {
+  const startedAt = Date.now();
   const controller = new AbortController();
-  const cancel = () => controller.abort();
+  let jobId: string | undefined;
+  let downloadAdmitted = false;
+  const cancel = () => {
+    if (!res.writableFinished) {
+      controller.abort();
+      if (jobId) updateDownloadJob(jobId, 'cancelled');
+    }
+  };
   res.on('close', cancel);
   const timeout = setTimeout(cancel, 600000); // 10 min max (long songs + capture overhead)
   const isDownload = req.path.includes('/download/');
@@ -187,10 +228,31 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
       return res.status(400).json({ error: 'Invalid YouTube video ID' });
     }
 
-    res.setHeader('X-Audio-Via', 'sonora-chromium-bridge');
+    const startRaw = req.query.start;
+    const start = startRaw === undefined ? 0 : typeof startRaw === 'string' && startRaw.trim() !== '' ? Number(startRaw) : NaN;
+    if (!Number.isFinite(start) || start < 0) {
+      return res.status(400).json({ error: 'Invalid start position' });
+    }
+    if (isDownload && start !== 0) return res.status(400).json({ error: 'Downloads require the full track from position zero' });
+    res.setHeader('X-Audio-Start', String(start));
+    res.setHeader('X-Audio-Via', isDownload ? 'sonora-direct-download' : 'sonora-chromium-bridge');
 
     // Each user gets an isolated browser session (see getSessionId above).
     const sessionId = getSessionId(req);
+    if (isDownload) {
+      if (activeDirectDownloads >= MAX_CONCURRENT_DIRECT_DOWNLOADS) {
+        return res.status(503).json({ error: 'download_capacity_reached', details: 'Download capacity reached; retry shortly' });
+      }
+      activeDirectDownloads++;
+      downloadAdmitted = true;
+    }
+    if (isDownload && req.query.requestId !== undefined) {
+      if (!validDownloadRequestId(req.query.requestId)) return res.status(400).json({ error: 'Invalid download request identifier' });
+      const downloadSession = getDownloadSessionId(req);
+      if (!downloadSession) return res.status(400).json({ error: 'A valid session is required for download progress' });
+      beginDownloadJob(req.query.requestId, downloadSession);
+      jobId = req.query.requestId;
+    }
 
     // iOS Safari/PWA cannot play WebM/Opus — serve MP3 (transcoded via ffmpeg).
     // Detect via User-Agent; also allow explicit ?format=mp3 override.
@@ -198,7 +260,7 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
     const isIOS = /iPad|iPhone|iPod/.test(userAgent);
     const wantsMp3 = req.query.format === 'mp3' || isIOS;
     const format = wantsMp3 ? 'mp3' : 'webm';
-    const mimeType = format === 'mp3' ? 'audio/mpeg' : await chromiumBridge.getMimeType(sessionId).catch(() => 'audio/webm');
+    const mimeType = format === 'mp3' ? 'audio/mpeg' : isDownload ? 'audio/webm' : await chromiumBridge.getMimeType(sessionId).catch(() => 'audio/webm');
 
     res.setHeader('Content-Type', mimeType);
     res.setHeader('X-Audio-Format', format);
@@ -206,39 +268,64 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
     res.setHeader('X-Content-Type-Options', 'nosniff');
 
     if (isDownload) {
-      // For downloads, accumulate the full stream then serve as a file.
-      // Note: capture is real-time, so this takes as long as the song.
+      // Exact-upload direct transfer only; no real-time capture or alternate-song fallback.
+            const artifact = await directDownloader.download(videoId, controller.signal, format, state => {
+              if (jobId && !controller.signal.aborted) reportDownloadJob(jobId, state);
+            });
       const title = typeof req.query.title === 'string' ? req.query.title.slice(0, 100).trim() : videoId;
       const safeTitle = title.replace(/[^a-zA-Z0-9-_ ]/g, '').trim() || videoId;
       const ext = format === 'mp3' ? 'mp3' : 'webm';
-      res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}.${ext}"`);
+      try {
+        controller.signal.throwIfAborted();
+        if (jobId) updateDownloadJob(jobId, 'transferring');
+        res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}.${ext}"`);
+        res.setHeader('X-Audio-Complete', 'true');
+        res.setHeader('X-Audio-Duration', String(artifact.duration));
+        res.setHeader('Content-Length', String(artifact.size));
+        res.status(200);
+        await pipeline(createReadStream(artifact.path), res, { signal: controller.signal });
+      } finally { await artifact.dispose(); }
+      return;
     }
 
-    res.status(200);
-
-    // Pipe bridge audio chunks directly to the HTTP response
+    // Fetch the first byte before piping: pipeline destroys its destination on
+    // startup errors, preventing an actionable JSON response.
+    const audio = chromiumBridge.play(sessionId, videoId, controller.signal, format, start);
+    const first = await audio.next();
+    if (first.done || !first.value?.length) {
+      await audio.return(undefined);
+      if (controller.signal.aborted) return;
+      throw new Error('Chromium returned an empty audio stream');
+    }
     async function* chunks() {
       try {
-        for await (const chunk of chromiumBridge.play(sessionId, videoId, controller.signal, format)) {
-          yield chunk;
-        }
-      } catch (err: any) {
-        if (controller.signal.aborted) return;
-        throw err;
+        yield first.value;
+        yield* audio;
+      } finally {
+        controller.abort();
+        await audio.return(undefined);
       }
     }
-
-    logServerPerf('chromium bridge first byte', Date.now(), { videoId, isDownload, format, sessionId });
-    await pipeline(Readable.from(chunks()), res);
+    res.status(200);
+    logServerPerf('chromium bridge first byte', startedAt, { videoId, isDownload, format, sessionId, start });
+    await pipeline(Readable.from(chunks(), { highWaterMark: 1 }), res);
   } catch (err: any) {
+    if (jobId) updateDownloadJob(jobId, controller.signal.aborted ? 'cancelled' : 'failed');
     console.error('YT Music bridge error:', err);
     if (!res.headersSent) {
+      res.removeHeader('Content-Disposition');
+      res.removeHeader('X-Audio-Format');
+      res.removeHeader('X-Audio-Complete');
+      res.removeHeader('X-Audio-Duration');
+      res.removeHeader('Content-Length');
+      res.type('application/json');
       res.status(err?.status || 502).json({
-        error: err?.code || 'chromium_bridge_failed',
+        error: err?.code || (isDownload ? 'direct_download_failed' : 'chromium_bridge_failed'),
         details: err?.message,
       });
     }
   } finally {
+    if (downloadAdmitted) activeDirectDownloads--;
     clearTimeout(timeout);
     res.off('close', cancel);
   }

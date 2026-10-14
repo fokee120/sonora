@@ -24,7 +24,6 @@ export const HomeView: React.FC = () => {
     history,
     navigate,
     isOnline,
-    isR2Configured,
     storageInfo,
     downloadAlbum,
   } = useApp();
@@ -71,9 +70,7 @@ export const HomeView: React.FC = () => {
             </h1>
             <p className="text-sm text-zinc-400 leading-relaxed">
               {isOnline
-                ? isR2Configured
-                  ? 'Connected to your GCS bucket. Stream private master recordings or store offline in IndexedDB.'
-                  : 'Welcome! Explore your library with instant streaming, high-fidelity caching, and complete offline playback.'
+                ? 'Search YouTube Music or connect Google Drive to add your music. Your downloads stay on this device.'
                 : `Internet connection unavailable. You have ${storageInfo?.trackCount || 0} tracks cached in persistent storage ready for offline listening.`}
             </p>
           </div>

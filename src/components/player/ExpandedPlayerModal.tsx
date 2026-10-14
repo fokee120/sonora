@@ -17,6 +17,7 @@ import {
   ListMusic,
   Download,
   CheckCircle2,
+  Loader2,
 } from 'lucide-react';
 import { usePlayer } from '../../hooks/usePlayer.js';
 import { useApp } from '../../context/AppContext.js';
@@ -51,6 +52,8 @@ export const ExpandedPlayerModal: React.FC<ExpandedPlayerModalProps> = ({
     repeatMode,
     cycleRepeatMode,
     playbackSource,
+    isLoading,
+    error,
   } = usePlayer();
 
   const { isFavorite, toggleFavorite, isDownloaded, downloadTrack, removeDownload } = useApp();
@@ -181,7 +184,7 @@ export const ExpandedPlayerModal: React.FC<ExpandedPlayerModalProps> = ({
               ) : (
                 <>
                   <Cloud className="w-3.5 h-3.5 text-blue-400" />
-                  <span className="text-blue-300">GCS Cloud</span>
+                  <span className="text-blue-300">Legacy source</span>
                 </>
               )}
             </div>
@@ -233,9 +236,24 @@ export const ExpandedPlayerModal: React.FC<ExpandedPlayerModalProps> = ({
         </div>
 
         {/* Progress Bar with seeking */}
+        {error && <p role="alert" className="text-xs text-rose-300 break-words">{error}</p>}
+        {isLoading && <p role="status" className="text-xs text-zinc-400">{isPlaying ? 'Buffering…' : 'Loading audio…'}</p>}
         <div className="space-y-1.5">
           <div
             className="relative w-full h-2 bg-white/10 rounded-full cursor-pointer group"
+            role="slider"
+            tabIndex={duration > 0 ? 0 : -1}
+            aria-label="Seek"
+            aria-valuemin={0}
+            aria-valuemax={duration}
+            aria-valuenow={Math.min(currentTime, duration)}
+            aria-valuetext={formatTime(currentTime)}
+            onKeyDown={(e) => {
+              if (!duration) return;
+              const position = e.key === 'Home' ? 0 : e.key === 'End' ? duration
+                : e.key === 'ArrowRight' ? currentTime + 5 : e.key === 'ArrowLeft' ? currentTime - 5 : null;
+              if (position !== null) { e.preventDefault(); seek(position); }
+            }}
             onClick={(e) => {
               const rect = e.currentTarget.getBoundingClientRect();
               const pct = (e.clientX - rect.left) / rect.width;
@@ -288,9 +306,10 @@ export const ExpandedPlayerModal: React.FC<ExpandedPlayerModalProps> = ({
               togglePlay();
             }}
             className="w-16 h-16 rounded-full bg-white text-zinc-950 flex items-center justify-center hover:scale-105 active:scale-95 transition shadow-2xl"
-            title={isPlaying ? 'Pause' : 'Play'}
+            title={isLoading ? 'Cancel loading' : isPlaying ? 'Pause' : error ? 'Retry playback' : 'Play'}
+            aria-label={isLoading ? 'Cancel loading' : isPlaying ? 'Pause' : error ? 'Retry playback' : 'Play'}
           >
-            {isPlaying ? (
+            {isLoading ? <Loader2 className="w-7 h-7 animate-spin" /> : isPlaying ? (
               <Pause className="w-7 h-7 fill-current" />
             ) : (
               <Play className="w-7 h-7 fill-current ml-1" />

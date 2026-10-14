@@ -6,8 +6,8 @@ import {
   Playlist,
   ViewRoute,
   StorageQuotaInfo,
-  AuthSession,
 } from '../types/index.js';
+import { migrateLegacyCatalog } from '../lib/legacyCatalogMigration.js';
 import { dbService } from '../lib/db.js';
 import { offlineManager } from '../lib/offline/OfflineManager.js';
 import { useNetworkState } from '../hooks/useNetworkState.js';
@@ -41,12 +41,9 @@ interface AppContextType {
   playlists: Playlist[];
   favorites: Set<string>;
   history: { trackId: string; playedAt: number }[];
-  isGcsConfigured: boolean;
-  isR2Configured: boolean;
   isLoadingLibrary: boolean;
   libraryError: string | null;
   refreshLibrary: () => Promise<void>;
-  rescanLibrary: () => Promise<void>;
   addTracksToLibrary: (tracks: Track[]) => Promise<void>;
 
   // Google Drive
@@ -106,10 +103,6 @@ interface AppContextType {
   toggleFavorite: (trackId: string) => Promise<void>;
   isFavorite: (trackId: string) => boolean;
 
-  // Auth
-  authSession: AuthSession;
-  login: (email: string, name?: string) => Promise<{ success: boolean; error?: string }>;
-  logout: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -125,20 +118,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [history, setHistory] = useState<{ trackId: string; playedAt: number }[]>([]);
 
-  const [isGcsConfigured, setIsGcsConfigured] = useState<boolean>(false);
-  const [isR2Configured, setIsR2Configured] = useState<boolean>(false);
   const [isLoadingLibrary, setIsLoadingLibrary] = useState<boolean>(true);
   const [libraryError, setLibraryError] = useState<string | null>(null);
 
   const [storageInfo, setStorageInfo] = useState<StorageQuotaInfo | null>(null);
   const [downloadCounter, setDownloadCounter] = useState<number>(0); // To trigger reactivity on downloads
-
-  const [authSession, setAuthSession] = useState<AuthSession>({
-    user: null,
-    isAuthenticated: false,
-    authRequired: false,
-    authorizedEmails: [],
-  });
 
   // Google Drive Integration State
   const [driveUser, setDriveUser] = useState<User | null>(null);
@@ -214,128 +198,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
-  // Check auth session
-  const checkSession = useCallback(async () => {
-    try {
-      const token = localStorage.getItem('music_auth_token');
-      const res = await fetch('/api/auth/session', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setAuthSession(data);
-      }
-    } catch {
-      // Offline fallback: check stored user
-      const stored = localStorage.getItem('music_auth_user');
-      if (stored) {
-        try {
-          const user = JSON.parse(stored);
-          setAuthSession({
-            user,
-            isAuthenticated: true,
-            authRequired: false,
-            authorizedEmails: [],
-          });
-        } catch {
-          // ignore
-        }
-      }
-    }
-  }, []);
-
-  // Fetch Library from server or IndexedDB cache
+  // User-owned catalog only; an empty server library must never replace local imports.
   const refreshLibrary = useCallback(async () => {
     setIsLoadingLibrary(true);
     setLibraryError(null);
-
-    // Try fetching from API when online
-    if (navigator.onLine && !getDriveAccessToken()) {
-      try {
-        const token = localStorage.getItem('music_auth_token');
-        const res = await fetch('/api/library', {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          if (getDriveAccessToken()) return;
-          setTracks(data.tracks || []);
-          setAlbums(data.albums || []);
-          setArtists(data.artists || []);
-          const gcsConf = Boolean(data.isGcsConfigured ?? data.isR2Configured);
-          setIsGcsConfigured(gcsConf);
-          setIsR2Configured(gcsConf);
-
-          // Cache in IndexedDB for offline access
-          await dbService.saveTracks(data.tracks || []);
-          await dbService.saveAlbums(data.albums || []);
-          await dbService.saveArtists(data.artists || []);
-          setIsLoadingLibrary(false);
-          return;
-        }
-      } catch (err: any) {
-        console.warn('Network fetch failed, falling back to local DB cache:', err);
-      }
-    }
-
-    // Offline or fallback to local IndexedDB
     try {
-      const cachedTracks = await dbService.getAllTracks();
-      const cachedAlbums = await dbService.getAllAlbums();
-      const cachedArtists = await dbService.getAllArtists();
-
-      if (cachedTracks.length > 0) {
-        setTracks(cachedTracks);
-        setAlbums(cachedAlbums);
-        setArtists(cachedArtists);
-      } else {
-        setLibraryError('No cached tracks found. Please connect to the internet to load the music library.');
-      }
-    } catch (dbErr: any) {
-      setLibraryError(dbErr.message || 'Failed to load local database.');
+      await migrateLegacyCatalog();
+      setTracks(await dbService.getAllTracks());
+      setAlbums(await dbService.getAllAlbums());
+      setArtists(await dbService.getAllArtists());
+    } catch (err: any) {
+      setLibraryError(err.message || 'Failed to load local library.');
     } finally {
       setIsLoadingLibrary(false);
     }
   }, []);
-
-  // Force a fresh scan on Google Cloud Storage and update immediately
-  const rescanLibrary = useCallback(async () => {
-    setIsLoadingLibrary(true);
-    setLibraryError(null);
-
-    try {
-      const token = localStorage.getItem('music_auth_token');
-      const res = await fetch('/api/storage/rescan', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ prefix: 'music/' }),
-      });
-
-      if (res.ok) {
-        const payload = await res.json();
-        const data = payload.result || payload;
-        setTracks(data.tracks || []);
-        setAlbums(data.albums || []);
-        setArtists(data.artists || []);
-        const gcsConf = Boolean(data.isGcsConfigured ?? data.isR2Configured);
-        setIsGcsConfigured(gcsConf);
-        setIsR2Configured(gcsConf);
-
-        await dbService.saveTracks(data.tracks || []);
-        await dbService.saveAlbums(data.albums || []);
-        await dbService.saveArtists(data.artists || []);
-        return;
-      }
-    } catch (err: any) {
-      console.warn('Rescan network request failed, falling back to normal refresh:', err);
-    }
-
-    await refreshLibrary();
-  }, [refreshLibrary]);
 
   const addTracksToLibrary = useCallback(async (incoming: Track[]) => {
     if (incoming.length === 0) return;
@@ -485,11 +362,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   useEffect(() => {
-    checkSession();
     refreshLibrary();
     loadUserData();
     refreshStorageInfo();
-  }, [checkSession, refreshLibrary, loadUserData, refreshStorageInfo]);
+  }, [refreshLibrary, loadUserData, refreshStorageInfo]);
 
   // React to download completions: newly saved YT tracks join the library
   useEffect(() => {
@@ -726,58 +602,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [favorites]
   );
 
-  // Auth
-  const login = useCallback(
-    async (email: string, name?: string): Promise<{ success: boolean; error?: string }> => {
-      try {
-        const res = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, name }),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          return { success: false, error: data.error || 'Login failed' };
-        }
-
-        if (data.token) {
-          localStorage.setItem('music_auth_token', data.token);
-          localStorage.setItem('music_auth_user', JSON.stringify(data.user));
-          setAuthSession((prev) => ({
-            ...prev,
-            user: data.user,
-            isAuthenticated: true,
-          }));
-          refreshLibrary();
-          return { success: true };
-        }
-        return { success: false, error: 'No token received' };
-      } catch (err: any) {
-        return { success: false, error: err.message || 'Network error logging in' };
-      }
-    },
-    [refreshLibrary]
-  );
-
-  const logout = useCallback(async () => {
-    try {
-      const token = localStorage.getItem('music_auth_token');
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-    } catch {
-      // ignore
-    }
-    localStorage.removeItem('music_auth_token');
-    localStorage.removeItem('music_auth_user');
-    setAuthSession((prev) => ({
-      ...prev,
-      user: null,
-      isAuthenticated: false,
-    }));
-  }, []);
-
   return (
     <AppContext.Provider
       value={{
@@ -791,12 +615,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         playlists,
         favorites,
         history,
-        isGcsConfigured,
-        isR2Configured,
         isLoadingLibrary,
         libraryError,
         refreshLibrary,
-        rescanLibrary,
         addTracksToLibrary,
         driveUser,
         isDriveConnected,
@@ -838,9 +659,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         removeTrackFromPlaylist,
         toggleFavorite,
         isFavorite,
-        authSession,
-        login,
-        logout,
       }}
     >
       {children}

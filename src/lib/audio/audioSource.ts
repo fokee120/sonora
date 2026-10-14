@@ -1,6 +1,7 @@
 import type { Track } from '../../types/index.js';
 import { getDriveAccessToken } from '../googleAuth.js';
 import { isYoutubeTrack, youtubeVideoId } from '../ytmusic/youtubeMusic.js';
+import { createUuid } from '../uuid.js';
 
 /**
  * Per-client session ID for the Chromium bridge. Each browser gets a unique
@@ -25,16 +26,41 @@ export function bridgeHeaders(): Record<string, string> {
   return { 'X-Session-Id': getBridgeSessionId() };
 }
 
+let prepareRequest: Promise<void> | null = null;
+let prepareAgainAt = 0;
+
+/** Optional, silent warmup. Never request a song or wait for this before play. */
+export function prepareYoutubeBridge(): Promise<void> {
+  if (prepareRequest) return prepareRequest;
+  if (!navigator.onLine || Date.now() < prepareAgainAt) return Promise.resolve();
+  // Cool down failures too, including deployments without this optional API.
+  prepareAgainAt = Date.now() + 30_000;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  prepareRequest = fetch('/api/ytmusic/bridge/prepare', {
+    method: 'POST', headers: bridgeHeaders(), signal: controller.signal,
+  }).then(async response => {
+    if (response.ok) prepareAgainAt = Date.now() + 5 * 60_000;
+    await response.body?.cancel();
+  }).catch(() => {
+    // Warmup is an optimization, not a playback prerequisite.
+  }).finally(() => {
+    clearTimeout(timeout);
+    prepareRequest = null;
+  });
+  return prepareRequest;
+}
+
 export function isDriveTrack(track: Track): boolean {
   return track.id.startsWith('gdrive:') || track.cloudKey.startsWith('gdrive://');
 }
 
-export function youtubeStreamUrl(track: Track): string {
+export function youtubeStreamUrl(track: Track, start = 0): string {
   const videoId = youtubeVideoId(track);
   if (!/^[\w-]{11}$/.test(videoId)) throw new Error('Invalid YouTube track. Search for it again.');
   // Session ID as query param (<audio src> can't set headers) — isolates
   // this user's playback from other concurrent users on the bridge.
-  return `/api/ytmusic/stream/${encodeURIComponent(videoId)}?session=${encodeURIComponent(getBridgeSessionId())}`;
+  return `/api/ytmusic/stream/${encodeURIComponent(videoId)}?session=${encodeURIComponent(getBridgeSessionId())}${start > 0 ? `&start=${Math.max(0, start)}` : ''}`;
 }
 
 export function youtubeDownloadUrl(track: Track): string {
@@ -77,30 +103,52 @@ export async function fetchDriveAudio(track: Track, options: RequestInit = {}): 
   return response;
 }
 
-export async function cloudStreamUrl(track: Track, signal?: AbortSignal): Promise<string> {
-  const response = await fetch(`/api/tracks/${encodeURIComponent(track.id)}/stream-url`, { signal });
-  if (!response.ok) throw await responseError(response, 'Could not obtain audio');
-  const data = await response.json();
-  if (!data.streamUrl) throw new Error('No audio URL returned.');
-  return data.streamUrl;
-}
-
-export async function fetchTrackAudio(track: Track, signal?: AbortSignal): Promise<Response> {
+export async function fetchTrackAudio(track: Track, signal?: AbortSignal, onProgress?: (state: { phase: 'preparing' | 'recording' | 'fetching' | 'finalizing'; progress: number; recordedSeconds: number; sourceDuration: number; sourceBytesDownloaded?: number; sourceTotalBytes?: number }) => Promise<void>): Promise<Response> {
   if (isYoutubeTrack(track)) {
-    return fetchYoutubeAudio(track, signal, true);
+    return fetchYoutubeAudio(track, signal, true, onProgress);
   }
   if (isDriveTrack(track)) return fetchDriveAudio(track, { signal });
-  const response = await fetch(await cloudStreamUrl(track, signal), { signal });
-  if (!response.ok) throw await responseError(response, 'Could not download audio');
-  return response;
+  throw new Error('This legacy cloud source is no longer supported. Import the song from Google Drive or search YouTube Music to retry.');
 }
 
 /** A single full GET avoids unsupported Range requests while the audio backend transcodes MP3. */
-export async function fetchYoutubeAudio(track: Track, signal?: AbortSignal, download = false): Promise<Response> {
+export async function fetchYoutubeAudio(track: Track, signal?: AbortSignal, download = false, onProgress?: (state: { phase: 'preparing' | 'recording' | 'fetching' | 'finalizing'; progress: number; recordedSeconds: number; sourceDuration: number; sourceBytesDownloaded?: number; sourceTotalBytes?: number }) => Promise<void>): Promise<Response> {
   const metadata = new URLSearchParams({ title: track.title, artist: track.artist, duration: String(track.duration || 0) });
-  const response = await fetch(`${download ? youtubeDownloadUrl(track) : youtubeStreamUrl(track)}?${metadata}`, {
-    signal, cache: 'no-store',
-  });
+  const polling = new AbortController();
+  const requestId = download && onProgress ? createUuid() : undefined;
+  if (requestId) metadata.set('requestId', requestId);
+  const cancelPolling = () => polling.abort();
+  signal?.addEventListener('abort', cancelPolling, { once: true });
+  if (signal?.aborted) cancelPolling();
+  let response: Response;
+  const pending = fetch(`${download ? youtubeDownloadUrl(track) : youtubeStreamUrl(track)}&${metadata}`, { signal, cache: 'no-store' });
+  const monitor = requestId ? (async () => {
+    while (!polling.signal.aborted) {
+      try {
+        const status = await fetch(`/api/ytmusic/download-status/${requestId}?session=${encodeURIComponent(getBridgeSessionId())}`, { signal: polling.signal, cache: 'no-store' });
+        if (status.ok) {
+          const state = await status.json();
+          if (!polling.signal.aborted && ['preparing', 'recording', 'fetching', 'finalizing'].includes(state.phase) && Number.isFinite(state.progress)) {
+            await onProgress!({
+              phase: state.phase,
+              progress: Math.min(95, Math.max(0, state.progress)),
+              recordedSeconds: Number.isFinite(state.recordedSeconds) ? state.recordedSeconds : 0,
+              sourceDuration: Number.isFinite(state.sourceDuration) ? state.sourceDuration : 0,
+              sourceBytesDownloaded: Number.isFinite(state.downloadedBytes) ? Math.max(0, state.downloadedBytes) : 0,
+              sourceTotalBytes: Number.isFinite(state.totalBytes) ? Math.max(0, state.totalBytes) : 0,
+            });
+          }
+        }
+      } catch { /* Status outages must not abort valid downloads. */ }
+      if (!polling.signal.aborted) await new Promise<void>(resolve => {
+        const done = () => { clearTimeout(timer); polling.signal.removeEventListener('abort', done); resolve(); };
+        const timer = setTimeout(done, 500);
+        polling.signal.addEventListener('abort', done, { once: true });
+      });
+    }
+  })() : Promise.resolve();
+  try { response = await pending; }
+  finally { cancelPolling(); signal?.removeEventListener('abort', cancelPolling); await monitor; }
   if (!response.ok) {
     const data = await response.json().catch(() => null);
     const detail = data?.details || data?.error;

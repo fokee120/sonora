@@ -73,7 +73,9 @@ export default defineConfig(() => {
           ],
         },
         devOptions: {
-          enabled: true,
+          // Development workers can activate during playback and reload the app.
+          // Offline/PWA behavior remains enabled in production builds.
+          enabled: false,
           type: 'module',
         },
       }),
@@ -85,7 +87,11 @@ export default defineConfig(() => {
     },
     server: {
       hmr: process.env.DISABLE_HMR !== 'true',
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      watch: process.env.DISABLE_HMR === 'true' ? null : {
+        // Browser profiles, generated workers and test artifacts are not app
+        // source. Reloading for their writes interrupts an active audio stream.
+        ignored: ['**/.sonora/**', '**/dev-dist/**', '**/tests/**', '**/test-results/**', '**/playwright-report/**'],
+      },
     },
   };
 });

@@ -1,10 +1,9 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { AppProvider, useApp } from './context/AppContext.js';
 import { Sidebar } from './components/navigation/Sidebar.js';
 import { MobileNavBar } from './components/navigation/MobileNavBar.js';
 import { BottomPlayer } from './components/player/BottomPlayer.js';
 import { OfflineIndicator } from './components/common/OfflineIndicator.js';
-import { AuthModal } from './components/auth/AuthModal.js';
 import { HomeView } from './views/HomeView.js';
 import { SearchView } from './views/SearchView.js';
 import { LibraryView } from './views/LibraryView.js';
@@ -22,18 +21,12 @@ import { Plus } from 'lucide-react';
 const MainAppContent: React.FC = () => {
   const {
     route,
-    authSession,
     isCreatePlaylistOpen,
     createPlaylistInitialTrackId,
     closeCreatePlaylist,
     openCreatePlaylist,
   } = useApp();
   const { currentTrack } = usePlayer();
-  const [showAuthModal, setShowAuthModal] = useState(false);
-
-  // If server requires auth and user is not authenticated, lock screen with modal
-  const needsAuth = authSession.authRequired && !authSession.isAuthenticated;
-
   const renderCurrentView = () => {
     switch (route.type) {
       case 'home':
@@ -86,15 +79,8 @@ const MainAppContent: React.FC = () => {
           <header className="h-16 shrink-0 hidden md:flex items-center justify-between px-8 bg-black/20 backdrop-blur-md border-b border-white/5 z-20 select-none">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
-                <div
-                  className={`w-2 h-2 rounded-full ${
-                    authSession.user
-                      ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]'
-                      : 'bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.6)]'
-                  }`}
-                />
                 <span className="text-[11px] font-semibold tracking-wider uppercase text-zinc-400">
-                  {authSession.user ? 'Authenticated Session' : 'Sonora Vault'}
+                  Sonora
                 </span>
               </div>
             </div>
@@ -115,26 +101,12 @@ const MainAppContent: React.FC = () => {
 
               <div className="text-right ml-2">
                 <div className="text-xs font-medium text-white">
-                  {authSession.user ? authSession.user.name : 'Personal Cloud Library'}
+                  Personal Music Library
                 </div>
                 <div className="text-[10px] text-zinc-500 font-mono tracking-tight">
                   {currentTrack ? `Now Playing: ${currentTrack.title}` : 'High-Fidelity Audio'}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!authSession.isAuthenticated) {
-                    setShowAuthModal(true);
-                  }
-                }}
-                className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-500 to-purple-500 border border-white/10 flex items-center justify-center font-bold text-xs shadow-md transition hover:scale-105 hover:border-white/25 focus:outline-hidden focus:ring-2 focus:ring-blue-400/60 disabled:cursor-default disabled:hover:scale-100"
-                title={authSession.isAuthenticated ? 'Signed in' : 'Sign in'}
-                aria-label={authSession.isAuthenticated ? 'Signed in' : 'Sign in'}
-                disabled={authSession.isAuthenticated}
-              >
-                {authSession.user?.name ? authSession.user.name.charAt(0).toUpperCase() : 'S'}
-              </button>
             </div>
           </header>
 
@@ -165,14 +137,6 @@ const MainAppContent: React.FC = () => {
         />
       )}
 
-      {/* Private Authentication Modal */}
-      {(needsAuth || showAuthModal) && (
-        <AuthModal
-          isOpen={true}
-          isForced={needsAuth}
-          onClose={() => setShowAuthModal(false)}
-        />
-      )}
     </div>
   );
 };

@@ -1,5 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import scanHandler from '../api/drive/scan.js';
+// Exercise the current frontend rather than a generated dev service worker,
+// which can reload the page during the first playback assertion.
+test.use({ serviceWorkers: 'block' });
 
 function wav(seconds = 4): Buffer {
   const sampleRate = 8000;
@@ -29,6 +32,8 @@ const track = {
 };
 
 async function setup(page: Page) {
+  // Exercise explicit storage requests, not the once-per-device startup prompt.
+  await page.addInitScript(() => localStorage.setItem('sonora_storage_persist_requested', '1'));
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname;
     const body = path === '/api/library' ? { tracks: [track], albums: [], artists: [] }
@@ -37,6 +42,12 @@ async function setup(page: Page) {
     await route.fulfill({ json: body });
   });
   await page.goto('/');
+  await page.evaluate(async (userTrack) => {
+    const modulePath = '/src/lib/db.ts';
+    const { dbService } = await import(modulePath);
+    await dbService.saveTracks([userTrack]);
+  }, track);
+  await page.reload();
   await expect(page.getByText('Test Song').first()).toBeVisible();
   // Supply a synthetic OAuth token after Firebase's initial signed-out callback.
   await page.evaluate(async () => {
@@ -90,6 +101,7 @@ test('scan paginates the whole Drive and reads Song - Artist filenames without i
 });
 
 test('Drive playback advances, reports real duration, and can seek', async ({ page }) => {
+
   const requests: string[] = [];
   await serveAudio(page, requests);
   await setup(page);

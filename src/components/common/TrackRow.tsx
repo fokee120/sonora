@@ -79,6 +79,10 @@ export const TrackRow: React.FC<TrackRowProps> = ({
     }
   };
 
+  const formatBytes = (bytes: number) => bytes < 1024
+    ? `${bytes} B`
+    : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+
   const formatDuration = (seconds: number) => {
     if (!seconds || !Number.isFinite(seconds)) return '--:--';
     const mins = Math.floor(seconds / 60);
@@ -177,6 +181,17 @@ export const TrackRow: React.FC<TrackRowProps> = ({
             {downloadState.error || 'Download failed. Please try again.'}
           </p>
         )}
+        {downloading && (
+          <p role="status" className="text-xs text-blue-300 mt-1">
+            {downloadState?.status === 'queued' ? 'Queued'
+              : downloadState?.phase === 'fetching' ? `Downloading audio file${downloadState.sourceTotalBytes ? ` · ${formatBytes(downloadState.sourceBytesDownloaded || 0)} / ${formatBytes(downloadState.sourceTotalBytes)}` : ''}`
+              : downloadState?.phase === 'recording' ? `Recording ${formatDuration(downloadState.recordedSeconds || 0)} / ${formatDuration(downloadState.sourceDuration || 0)}`
+              : downloadState?.phase === 'finalizing' ? 'Finalizing full audio file'
+              : downloadState?.phase === 'transferring' ? 'Saving audio to this device'
+              : downloadState?.phase === 'validating' ? 'Verifying complete audio before saving'
+              : 'Preparing audio download'}
+          </p>
+        )}
       </div>
 
       {/* Album name column (desktop) */}
@@ -189,13 +204,16 @@ export const TrackRow: React.FC<TrackRowProps> = ({
       {/* Download Action & Progress */}
       <div className="flex items-center gap-2 shrink-0">
         {downloading ? (
-          <div
+          <button
             className="flex items-center gap-1 text-[11px] text-blue-400 bg-blue-950/50 px-2 py-1 rounded-md border border-blue-800/40"
-            title="Downloading to IndexedDB..."
+            title="Cancel download"
+            aria-label="Cancel download"
+            onClick={e => { e.stopPropagation(); offlineManager.cancelDownload(track.id); }}
           >
             <Loader2 className="w-3 h-3 animate-spin text-blue-400" />
             <span className="font-mono">{downloadState?.progress || 0}%</span>
-          </div>
+            <span>Cancel</span>
+          </button>
         ) : downloaded ? (
           <button
             key={`downloaded-${downloadPulse}`}

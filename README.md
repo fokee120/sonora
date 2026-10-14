@@ -2,7 +2,7 @@
 
 Your private cloud music player, tuned for personal libraries that deserve better than a dusty folder full of MP3s.
 
-Sonora is a full-stack React music app for streaming your own audio collection from Google Drive, saving tracks for offline playback, building playlists, and keeping a polished music-library experience across devices. It is designed for people who want a Spotify-like home for files they already own, with private access control and a lightweight Vercel deployment.
+Sonora is a full-stack React music app for YouTube Music playback, streaming your own audio collection from Google Drive, saving tracks offline, and building playlists. It opens without an account gate; Google sign-in is optional and used only for Drive. The Chromium audio bridge runs on a persistent Node host.
 
 ![Sonora preview](public/icon.svg)
 
@@ -13,13 +13,13 @@ Sonora is a full-stack React music app for streaming your own audio collection f
 - Reads real track duration and metadata where the browser can access it
 - Saves Drive tracks into browser storage for offline playback
 - Supports playlists, liked songs, albums, artists, search, downloads, and queue controls
-- Keeps app sign-in persistent with a secure server-side session
+- Opens immediately without a local email account; Google sign-in is only for Drive
 - Runs as a PWA so it can feel closer to a native music app
-- Falls back cleanly when offline, disconnected, or missing cloud credentials
+- Keeps existing personal downloads and playlists when disconnected
 
 ## Why Sonora Exists
 
-Music files are still wonderful. They are yours, they do not disappear from a catalog overnight, and they can live anywhere you want them to. Sonora gives that library a proper home: quick search, clean browsing, persistent login, offline access, and a player that feels made for actual daily use.
+Music files are still wonderful. They are yours, they do not disappear from a catalog overnight, and they can live anywhere you want them to. Sonora gives that library a proper home: quick search, clean browsing, optional Drive sign-in, offline access, and a player that feels made for actual daily use.
 
 It is not trying to be a giant streaming platform. It is a personal vault with nice speakers.
 
@@ -44,17 +44,9 @@ Press the download button on a supported track and Sonora stores the audio in In
 
 Browser storage protection is requested from the Settings page when available. Some browsers may decline persistent storage automatically, but downloads can still work inside normal browser quota.
 
-### Private App Access
-
-Sonora can require an approved email before the music player opens. The auth session is signed with `AUTH_SECRET` and kept persistent so you do not have to log in every time you open the site.
-
 ### PWA Ready
 
 The app includes a Vite PWA setup, offline-aware UI, and install support. On supported browsers, Sonora can be installed to the home screen or desktop.
-
-### Cloud Storage Mode
-
-The project includes optional Google Cloud Storage support for serving a bundled/private cloud library. If GCS credentials are not configured, Sonora can still run in demo or Drive mode.
 
 ## Tech Stack
 
@@ -116,20 +108,7 @@ Copy `.env.example` to `.env` and fill in the values you need.
 GEMINI_API_KEY="MY_GEMINI_API_KEY"
 APP_URL="https://your-site.vercel.app"
 
-GCP_PROJECT_ID=
-GCS_BUCKET_NAME=
-GCP_CLIENT_EMAIL=
-GCP_PRIVATE_KEY=
-
-AUTHORIZED_EMAILS=you@example.com
-AUTH_SECRET=replace-this-with-a-long-random-secret
 ```
-
-### Required For Private Access
-
-`AUTHORIZED_EMAILS` is a comma-separated list of emails allowed into the player.
-
-`AUTH_SECRET` signs the persistent app session. Use a long random value in production. Do not leave the example value in Vercel.
 
 ### Required For Google Drive
 
@@ -165,6 +144,10 @@ is shown as:
 
 If the file has readable ID3 metadata, Sonora can use richer track details over time.
 
+## Library ownership
+
+A fresh library is empty. Add music through Google Drive or YouTube Music; there are no bundled songs or remote sample fallbacks. Upgrades remove only the seven exact IDs from the retired bundled catalog. Personal tracks, playlists, download state and audio bytes are preserved. Older unsupported cloud tracks remain local records and can play downloaded audio; otherwise import them from Drive or search YouTube Music again.
+
 ## Offline Notes
 
 Offline playback depends on the browser storing the audio file successfully. Storage quota and persistence behavior are controlled by the browser, not the app.
@@ -185,7 +168,7 @@ src/context/          Shared app state and library actions
 src/hooks/            Player, network, and PWA hooks
 src/lib/audio/        Playback, Drive media fetching, metadata helpers
 src/lib/offline/      IndexedDB audio storage and download manager
-src/server/           Local Express server and cloud storage helpers
+src/server/           Local Express server, Drive and YouTube Music integrations
 src/views/            Main app screens
 tests/                Playwright browser tests
 ```
@@ -215,8 +198,10 @@ Private personal project. Add a license before publishing or accepting outside c
 
 ## YouTube Music audio playback
 
-Search and audio delivery are separate services. Playback uses the existing Sonora player and the same server audio resolver as offline downloads. Configure the dedicated Sonora Audio Service with `SONORA_AUDIO_API_URL` and, if needed, `SONORA_AUDIO_API_KEY`. The service runs yt-dlp and ffmpeg outside Vercel and returns MP3 bytes as `audio/mpeg`.
+Search uses the YouTube Music catalog. Playback streams WebM/Opus from an isolated, prewarmed Chromium player through `/api/ytmusic/stream/:videoId`; iOS receives MP3 via ffmpeg. Track changes reuse the loaded player. Seeking opens a fresh capture at the requested song position.
 
-YouTube playback uses Sonora's native audio element with a completed in-memory MP3 Blob, so transcoded streams support reliable local seeking after preparation. The download button stores the same MP3 bytes in IndexedDB for offline playback. If a catalog upload returns empty audio, Sonora tries up to two other uploads through the audio service with the same artist, title/version, and a duration within eight seconds (or 4%, whichever is smaller). Playback and downloads use this same recovery. If no matching upload works, Sonora reports an error instead of saving an empty download.
+Downloads fetch the exact source audio with yt-dlp instead of recording it. Install or update the local downloader with `node scripts/setup-downloader.mjs` (requires uv); ffmpeg and Node must also be available. The UI reports actual transfer bytes, followed by finalization and native audio verification. Only a finalized, fully decoded and duration-checked file is saved to IndexedDB and marked 100%. In a live local UI test, a 4:09 catalog song was downloaded and saved in 4.95 seconds, with 248.41 seconds of decoded audio verified. This is a measured sample, not a guarantee for every track/IP. Bot checks and unavailable sources fail explicitly; no alternate song or real-time recording fallback is used. See [direct-download setup and tests](docs/DIRECT_DOWNLOADS.md).
 
-To run the optional real audio-service browser check, deploy or start `services/audio`, set `SONORA_AUDIO_API_URL`, and run `npx playwright test tests/audio-service-live.spec.ts`. Set `PLAYWRIGHT_EXECUTABLE_PATH` to test an installed Brave browser in an isolated test profile.
+The bridge needs Playwright Chromium, ffmpeg, and the official unpacked uBlock Origin Lite extension under `.sonora/extensions/ublock-origin-lite` (or `SONORA_ADBLOCK_EXTENSION_DIR`). No separate audio-service URL or account is needed for the local bridge. A standard serverless function is not a suitable host for persistent Chromium sessions; Vercel-only deployment does not supply this local audio runtime.
+
+See [bridge reliability and verification](docs/chromium-bridge-reliability.md) for the implementation contract and repeatable tests. The optional `services/audio` experiment and its live-provider test are not the active Chromium playback path.

@@ -3,6 +3,7 @@ import { Search, X, Music, Disc3, User, WifiOff, Youtube, Loader2, AlertCircle }
 import { useApp } from '../context/AppContext.js';
 import { TrackRow } from '../components/common/TrackRow.js';
 import type { YtmFilter } from '../lib/ytmusic/youtubeMusic.js';
+import { prepareYoutubeBridge } from '../lib/audio/audioSource.js';
 
 type SearchSource = 'vault' | 'youtube';
 
@@ -30,6 +31,11 @@ export const SearchView: React.FC = () => {
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Warm while browsing/searching, not after the first song click.
+  useEffect(() => {
+    if (source === 'youtube' && isOnline) void prepareYoutubeBridge();
+  }, [source, isOnline]);
 
   // Trigger debounced YouTube Music search when typing in YT mode
   useEffect(() => {

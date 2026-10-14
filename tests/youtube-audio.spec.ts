@@ -50,7 +50,7 @@ for (const failure of [false, true]) {
       return (await import(path)).playerEngine.getState();
     });
     if (failure) {
-      expect((await state()).error).toContain('YouTube MP3 could not be decoded');
+      expect((await state()).error).toContain('YouTube audio playback failed');
       expect((await state()).isLoading).toBe(false);
     } else {
       await expect.poll(async () => (await state()).currentTime).toBeGreaterThan(0);

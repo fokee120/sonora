@@ -1,146 +1,56 @@
 import React, { useEffect, useState } from 'react';
-import {
-  Youtube,
-  CheckCircle2,
-  AlertCircle,
-  Loader2,
-  RefreshCw,
-  PlugZap,
-} from 'lucide-react';
-import {
-  fetchYoutubeMusicStatus,
-  testAudioBackend,
-  YtmStatus,
-} from '../../lib/ytmusic/youtubeMusic.js';
+import { Youtube, RefreshCw } from 'lucide-react';
+import { fetchYoutubeMusicStatus, type YtmStatus } from '../../lib/ytmusic/youtubeMusic.js';
 
 export const YoutubeMusicCard: React.FC = () => {
   const [status, setStatus] = useState<YtmStatus | null>(null);
-  const [isTesting, setIsTesting] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [message, setMessage] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
-
+  const [refreshing, setRefreshing] = useState(false);
   const loadStatus = async () => {
-    setIsRefreshing(true);
-    const s = await fetchYoutubeMusicStatus();
-    if (s) setStatus(s);
-    setIsRefreshing(false);
+    setRefreshing(true);
+    try { setStatus(await fetchYoutubeMusicStatus()); }
+    finally { setRefreshing(false); }
   };
-
-  useEffect(() => {
-    void loadStatus();
-  }, []);
-
-  const handleTest = async () => {
-    setIsTesting(true);
-    setMessage(null);
-    try {
-      const result = await testAudioBackend();
-      setMessage({ type: result.ok ? 'ok' : 'error', text: result.message });
-    } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Audio backend test failed.' });
-    } finally {
-      setIsTesting(false);
-    }
-  };
-
-  const configured = status?.audioBackend.configured ?? false;
+  useEffect(() => { void loadStatus(); }, []);
+  const bridge = status?.bridge?.mode === 'chromium';
 
   return (
     <section className="p-6 rounded-3xl bg-zinc-900/50 border border-zinc-800/80 shadow-xl space-y-5">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-start sm:items-center gap-3">
-          <div
-            className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 border ${
-              configured
-                ? 'bg-red-500/10 text-red-400 border-red-500/20 shadow-lg shadow-red-500/5'
-                : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-            }`}
-          >
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <div className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 bg-red-500/10 text-red-400 border border-red-500/20">
             <Youtube className="w-6 h-6" />
           </div>
           <div>
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <span>YouTube Music Integration</span>
-              {configured ? (
-                <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800/50 font-medium">
-                  Backend Connected
-                </span>
-              ) : (
-                <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-amber-950 text-amber-300 border border-amber-800/50 font-medium">
-                  Backend Missing
-                </span>
-              )}
-            </h2>
-            <p className="text-xs text-zinc-400 mt-0.5">
-              Search stays on YouTube Music. Playback and downloads use the Sonora Audio Service
-              to deliver 128 kbps MP3 bytes into the existing player and IndexedDB offline store.
+            <h2 className="text-base font-bold text-white">YouTube Music Integration</h2>
+            <p aria-live="polite" className="text-xs text-zinc-400 mt-1">
+              {refreshing ? 'Checking playback service…' : bridge ? 'Chromium bridge' : 'Playback service status unavailable'}
             </p>
           </div>
         </div>
-
-        <button
-          onClick={loadStatus}
-          className="p-2 text-zinc-400 hover:text-white rounded-xl bg-zinc-800 hover:bg-zinc-700 transition"
-          title="Refresh integration status"
-        >
-          <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+        <button onClick={loadStatus} disabled={refreshing} title="Refresh integration status" aria-label="Refresh integration status"
+          className="p-2 text-zinc-400 hover:text-white rounded-xl bg-zinc-800 hover:bg-zinc-700 transition disabled:opacity-50">
+          <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
         </button>
       </div>
-
-      {message && (
-        <div
-          className={`flex items-start gap-2 p-3 rounded-xl text-xs ${
-            message.type === 'ok'
-              ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'
-              : 'bg-rose-500/10 border border-rose-500/20 text-rose-300'
-          }`}
-        >
-          {message.type === 'ok' ? (
-            <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-          ) : (
-            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-          )}
-          <span>{message.text}</span>
-        </div>
-      )}
-
+      <p className="text-xs text-zinc-400 leading-relaxed">
+        Search the YouTube Music catalog and stream through an isolated browser player. No separate audio-service account or cloud bucket is required.
+      </p>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
         <div className="rounded-xl bg-zinc-950/60 border border-zinc-800 p-3">
-          <div className="text-zinc-500 uppercase tracking-wider text-[10px] font-semibold">Audio Backend</div>
-          <div className={configured ? 'text-emerald-300 mt-1' : 'text-amber-300 mt-1'}>
-            {configured ? 'Configured' : 'Set SONORA_AUDIO_API_URL'}
-          </div>
+          <div className="text-zinc-500 uppercase tracking-wider text-[10px] font-semibold">Playback</div>
+          <div className="text-zinc-200 mt-1">WebM / Opus; MP3 for iOS</div>
         </div>
         <div className="rounded-xl bg-zinc-950/60 border border-zinc-800 p-3">
-          <div className="text-zinc-500 uppercase tracking-wider text-[10px] font-semibold">Format</div>
-          <div className="text-zinc-200 mt-1">MP3, audio/mpeg</div>
+          <div className="text-zinc-500 uppercase tracking-wider text-[10px] font-semibold">Downloads</div>
+          <div className="text-zinc-200 mt-1">Direct file retrieval with transfer progress</div>
         </div>
         <div className="rounded-xl bg-zinc-950/60 border border-zinc-800 p-3">
-          <div className="text-zinc-500 uppercase tracking-wider text-[10px] font-semibold">API Key</div>
-          <div className="text-zinc-200 mt-1">{status?.audioBackend.hasApiKey ? 'Configured' : 'Not required'}</div>
+          <div className="text-zinc-500 uppercase tracking-wider text-[10px] font-semibold">Offline storage</div>
+          <div className="text-zinc-200 mt-1">Verified audio saved on this device</div>
         </div>
       </div>
-
-      <button
-        onClick={handleTest}
-        disabled={!configured || isTesting}
-        className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-xs font-semibold border border-zinc-700 transition active:scale-95 disabled:opacity-50"
-      >
-        {isTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <PlugZap className="w-3.5 h-3.5" />}
-        <span>{isTesting ? 'Testing...' : 'Test MP3 Backend'}</span>
-      </button>
-
-      <div className="text-[11px] text-zinc-500 space-y-1.5 leading-relaxed border-t border-zinc-800/80 pt-4">
-        <p>
-          <span className="text-zinc-300 font-semibold">How it works:</span> the browser keeps using
-          Sonora's existing `/api/ytmusic/stream/:id` and `/api/ytmusic/download/:id` routes. The
-          server proxies MP3 bytes from the Sonora Audio Service, and downloads remain stored in
-          IndexedDB by the existing offline manager.
-        </p>
-        <p className="text-zinc-600">
-          Note: only download content you have the right to keep. Respect YouTube's Terms of
-          Service and applicable copyright law.
-        </p>
+      <div className="text-[11px] text-zinc-500 leading-relaxed border-t border-zinc-800/80 pt-4">
+        Downloads fetch the source audio file instead of recording playback, then verify the full file before saving. Speed depends on your connection and source availability. Bot checks or unavailable tracks produce an error, not a different song or a slow recording fallback.
       </div>
     </section>
   );
