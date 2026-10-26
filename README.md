@@ -183,6 +183,36 @@ a044677a4af91e636556320ac1f46ba41ecc6a8a
 
 If a future experiment goes sideways, this is the commit to return to.
 
+## Sonora accounts, recommendations, and playlist import
+
+- **Sign in with Google is now the Sonora account**, not just Drive access.
+  Firebase Auth persistence keeps you signed in when the server goes down
+  or restarts (the SDK refreshes its own tokens). Sonora's account record
+  holds profile + preferences only — never a Google token — saved in
+  IndexedDB on the device and mirrored to the persistent host's
+  `.sonora-accounts.json` (`POST /api/accounts/sync`, `GET /api/accounts/:uid`).
+  Set favourite genres/artists/vibes in Settings → Sonora Account.
+- **Recommended for you** (Home) scores your own library against a taste
+  profile built from plays, likes, playlist membership, and explicit
+  preferences (`src/lib/taste.ts`, `src/lib/recommendations.ts`). No taste
+  signals means no recommendations — nothing is invented.
+- **Suggested songs** (Home) searches YouTube Music's catalog by your top
+  artists/genres. Honest limit: this is taste-derived, **not** your
+  signed-in YouTube Music home feed. Sonora's bridge uses anonymous
+  Chromium profiles, so there is no YTM account session to read yet;
+  adding a YTM login to the bridge is the prerequisite for true
+  YTM-profile suggestions, and it is deliberately not in this change
+  (it would mean storing a Google session in the bridge).
+- **Import playlist by URL** (Settings → Import a playlist): Spotify,
+  YouTube Music, and YouTube playlist links. Each entry is matched to a
+  playable YouTube Music track by title/artist similarity; matched tracks
+  become a new Sonora playlist, unmatched entries are listed and never
+  silently swapped for a wrong song. Spotify needs `SPOTIFY_CLIENT_ID` /
+  `SPOTIFY_CLIENT_SECRET` on the host (see `.env.example`); without them
+  the import endpoint answers 501 with a setup message.
+- Tests: `tests/accounts-recommendations-import.test.ts`
+  (`npx tsx --test tests/accounts-recommendations-import.test.ts`).
+
 ## Roadmap Ideas
 
 - Local drag-and-drop audio importer

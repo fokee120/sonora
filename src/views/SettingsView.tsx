@@ -5,10 +5,13 @@ import { PWAInstallButton } from '../components/common/PWAInstallButton.js';
 import { usePWAInstall } from '../hooks/usePWAInstall.js';
 import { GoogleDriveConnectCard } from '../components/auth/GoogleDriveConnectCard.js';
 import { YoutubeMusicCard } from '../components/settings/YoutubeMusicCard.js';
+import { AccountCard } from '../components/account/AccountCard.js';
+import { ImportPlaylistModal } from '../components/playlist/ImportPlaylistModal.js';
 
 export const SettingsView: React.FC = () => {
   const { storageInfo, refreshStorageInfo, requestPersistStorage, clearAllDownloads } = useApp();
   const { isInstalled } = usePWAInstall();
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [isPersisting, setIsPersisting] = useState(false);
   const [persistMessage, setPersistMessage] = useState<string | null>(null);
   const handlePersist = async () => {
@@ -34,8 +37,27 @@ export const SettingsView: React.FC = () => {
     <div id="settings-view" className="space-y-8 pb-16 max-w-4xl">
       <h1 className="text-2xl font-bold">Settings & Storage</h1>
       <p className="text-xs text-zinc-400">Google Drive, YouTube Music, offline downloads, and app installation.</p>
+      <AccountCard />
       <GoogleDriveConnectCard />
       <YoutubeMusicCard />
+      <section className="p-6 rounded-3xl bg-zinc-900/50 border border-zinc-800/80 shadow-xl space-y-4">
+        <h2 className="text-sm font-bold text-white">Import playlist by URL</h2>
+        <p className="text-xs text-zinc-400">
+          Spotify or YouTube Music playlist links are matched to playable YouTube Music tracks.
+          Unmatched entries are listed, never silently replaced. Spotify needs
+          SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET on the Sonora host.
+        </p>
+        <p className="text-xs text-zinc-400">
+          YouTube Music profile suggestions: not connected yet. Sonora&apos;s bridge uses anonymous
+          Chromium sessions, so there is no signed-in YTM home feed to read. Suggested songs on Home
+          are taste-derived searches instead, until a YTM login is added to the bridge.
+        </p>
+        <button onClick={() => setIsImportOpen(true)}
+          className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition">
+          Import a playlist
+        </button>
+      </section>
+      <ImportPlaylistModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} />
       <section className="p-6 rounded-3xl bg-zinc-900/50 border border-zinc-800/80 shadow-xl space-y-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 flex items-center justify-center">

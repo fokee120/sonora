@@ -13,6 +13,7 @@ import {
 import { useApp } from '../context/AppContext.js';
 import { usePlayer } from '../hooks/usePlayer.js';
 import { TrackRow } from '../components/common/TrackRow.js';
+import { RecommendationsSection } from '../components/home/RecommendationsSection.js';
 
 export const HomeView: React.FC = () => {
   const {
@@ -147,6 +148,8 @@ export const HomeView: React.FC = () => {
           </div>
         </section>
       )}
+
+      <RecommendationsSection />
 
       {/* Albums Shelf */}
       <section className="space-y-4">

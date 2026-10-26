@@ -5,6 +5,7 @@ import { createServer as createViteServer } from 'vite';
 import { DriveMusicService } from './src/server/drive/DriveMusicService.js';
 import { driveSessionStore } from './src/server/drive/DriveSessionStore.js';
 import youtubeApi from './src/server/ytmusic/api.js';
+import importRoutes from './src/server/import/importRoutes.js';
 import { chromiumBridge } from './src/server/bridge/ChromiumBridge.js';
 import { Readable } from 'stream';
 
@@ -176,6 +177,12 @@ app.get('/api/drive/stream/:fileId', async (req, res) => {
     res.status(500).json({ error: 'Failed to stream from Google Drive', details: err?.message });
   }
 });
+
+// ----------------------------------------------------
+// SONORA ACCOUNTS + PLAYLIST IMPORT ROUTES
+// ----------------------------------------------------
+
+app.use(importRoutes);
 
 // ----------------------------------------------------
 // YOUTUBE MUSIC INTEGRATION ROUTES
