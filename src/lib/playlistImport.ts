@@ -6,9 +6,9 @@
  *  - YouTube Music / YouTube public playlists: fetched from
  *    Sonora's own server (POST /api/import/ytmusic), no extra keys.
  *  - Spotify: fetched from Sonora's own server
- *    (POST /api/import/spotify), which needs a Spotify app's
- *    SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET on the host.
- *    Without them the server answers 501 with a setup message
+ *    (POST /api/import/spotify), after connecting the user's Spotify
+ *    account through PKCE. The host needs a client ID and redirect URI.
+ *    Without a connection the server answers with a setup message
  *    instead of pretending the import worked.
  *
  * Matching to a playable Sonora track is done afterwards with
@@ -18,7 +18,7 @@
  * reported as unmatched, never silently swapped for a wrong song.
  */
 
-export type PlaylistSource = 'spotify' | 'ytmusic' | 'youtube';
+export type PlaylistSource = 'spotify' | 'ytmusic' | 'youtube' | 'file';
 
 export interface ParsedPlaylistUrl {
   source: PlaylistSource;
@@ -26,6 +26,8 @@ export interface ParsedPlaylistUrl {
 }
 
 export interface ImportedTrack {
+  videoId?: string;
+  artworkUrl?: string;
   title: string;
   artist: string;
   album?: string;
@@ -36,7 +38,43 @@ export interface ImportedPlaylist {
   source: PlaylistSource;
   sourceId: string;
   title: string;
+  description?: string;
   tracks: ImportedTrack[];
+  warning?: string;
+}
+
+function importedTrackFromRecord(value: any): ImportedTrack | null {
+  const title = String(value?.title ?? value?.name ?? value?.track ?? '').trim();
+  if (!title) return null;
+  const artist = String(value?.artist ?? value?.artistName ?? value?.artists ?? 'Unknown Artist').trim() || 'Unknown Artist';
+  const duration = Number(value?.durationSeconds ?? value?.duration ?? 0);
+  return { title, artist, album: value?.album ? String(value.album) : undefined, videoId: value?.videoId || value?.youtubeId || undefined, artworkUrl: value?.artworkUrl || value?.thumbnailUrl || value?.thumbnail || undefined, durationSeconds: Number.isFinite(duration) && duration > 0 ? duration : undefined };
+}
+
+function parseCsv(text: string): ImportedTrack[] {
+  const rows: string[][] = []; let row: string[] = []; let cell = ''; let quoted = false;
+  for (let i = 0; i < text.length; i++) { const ch = text[i]; if (ch === '"') { if (quoted && text[i + 1] === '"') { cell += '"'; i++; } else quoted = !quoted; } else if (ch === ',' && !quoted) { row.push(cell.trim()); cell = ''; } else if ((ch === '\n' || ch === '\r') && !quoted) { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(cell.trim()); if (row.some(Boolean)) rows.push(row); row = []; cell = ''; } else cell += ch; }
+  if (cell || row.length) { row.push(cell.trim()); rows.push(row); }
+  if (!rows.length) return [];
+  const headers = rows[0].map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
+  const index = (...names: string[]) => names.map(n => headers.indexOf(n)).find(i => i >= 0) ?? -1;
+  const title = index('title', 'name', 'track'); const artist = index('artist', 'artistname', 'artists'); const album = index('album'); const videoId = index('videoid', 'youtubeid');
+  return rows.slice(1).map(values => importedTrackFromRecord({ title: title >= 0 ? values[title] : values[0], artist: artist >= 0 ? values[artist] : values[1], album: album >= 0 ? values[album] : undefined, videoId: videoId >= 0 ? values[videoId] : undefined })).filter(Boolean) as ImportedTrack[];
+}
+
+/** Parse a local JSON/CSV playlist without uploading the file anywhere. */
+export async function parsePlaylistFile(file: File): Promise<ImportedPlaylist> {
+  const text = await file.text(); const ext = file.name.toLowerCase().split('.').pop();
+  let title = file.name.replace(/\.[^.]+$/, '') || 'Imported playlist'; let tracks: ImportedTrack[] = [];
+  if (ext === 'csv' || ext === 'tsv') tracks = parseCsv(ext === 'tsv' ? text.replace(/\t/g, ',') : text);
+  else {
+    const data = JSON.parse(text); const list = Array.isArray(data) ? data : (data.tracks || data.songs || data.items || data.playlist?.tracks || []);
+    title = String(data?.title || data?.name || data?.playlist?.title || title);
+    tracks = list.map(importedTrackFromRecord).filter(Boolean) as ImportedTrack[];
+  }
+  if (!tracks.length) throw new Error('No songs were found in that file.');
+  const data = ext === 'csv' || ext === 'tsv' ? null : JSON.parse(text);
+  return { source: 'file', sourceId: `file:${file.name}:${file.lastModified}`, title, description: data?.description ? String(data.description) : undefined, tracks };
 }
 
 export function parsePlaylistUrl(raw: string): ParsedPlaylistUrl | null {
@@ -77,9 +115,9 @@ function parseDurationToSeconds(text: string): number {
 
 /** Spotify Web API playlist payload -> ImportedPlaylist. */
 export function parseSpotifyPlaylistResponse(data: any, sourceId: string): ImportedPlaylist {
-  const items: any[] = data?.tracks?.items || [];
+  const items: any[] = data?.items?.items || data?.tracks?.items || [];
   const tracks: ImportedTrack[] = items
-    .map((item) => item?.track)
+    .map((item) => item?.item || item?.track)
     .filter(Boolean)
     .map((track) => ({
       title: String(track?.name || '').trim(),
@@ -88,7 +126,7 @@ export function parseSpotifyPlaylistResponse(data: any, sourceId: string): Impor
       durationSeconds: typeof track?.duration_ms === 'number' ? Math.round(track.duration_ms / 1000) : undefined,
     }))
     .filter((t) => t.title);
-  return { source: 'spotify', sourceId, title: String(data?.name || 'Spotify playlist'), tracks };
+  return { source: 'spotify', sourceId, title: String(data?.name || 'Spotify playlist'), tracks, ...(data?.warning ? { warning: String(data.warning) } : {}) };
 }
 
 type JsonLike = { [key: string]: any };
@@ -101,30 +139,14 @@ function runTexts(node: JsonLike | undefined | null): string[] {
 
 /** InnerTube browse (playlist shelf) payload -> ImportedPlaylist. */
 export function parseYtmPlaylistResponse(data: any, sourceId: string): ImportedPlaylist {
-  const tracks: ImportedTrack[] = [];
-  const visit = (node: any): void => {
-    if (!node || typeof node !== 'object') return;
-    if (node.musicPlaylistShelfRenderer && Array.isArray(node.musicPlaylistShelfRenderer.contents)) {
-      for (const item of node.musicPlaylistShelfRenderer.contents) {
-        const renderer = item?.musicResponsiveListItemRenderer;
-        if (!renderer) continue;
-        const columns: JsonLike[] = renderer?.flexColumns ?? [];
-        const title = runTexts(columns[0])[0] || '';
-        const second = runTexts(columns[1]);
-        const durationText = second.find((t) => /^\d+(:\d{2})+$/.test(t));
-        if (!title) continue;
-        tracks.push({
-          title,
-          artist: second[0] || 'Unknown Artist',
-          durationSeconds: durationText ? parseDurationToSeconds(durationText) : undefined,
-        });
-      }
-      return;
-    }
-    for (const value of Object.values(node)) visit(value);
-  };
-  visit(data);
-  return { source: 'ytmusic', sourceId, title: 'YouTube Music playlist', tracks };
+  const tracks: ImportedTrack[] = []; const seen=new Set<string>();
+  const watchId=(node:any):string|undefined=>{if(!node||typeof node!=='object')return; if(node.watchEndpoint?.videoId)return node.watchEndpoint.videoId;for(const value of Object.values(node)){const found=watchId(value);if(found)return found;}};
+  const visit=(node:any):void=>{if(!node||typeof node!=='object')return;
+    const r=node.musicResponsiveListItemRenderer;
+    if(r){const columns=r.flexColumns||[];const title=runTexts(columns[0])[0]||'';const secondary=runTexts(columns[1]);const duration=[...secondary,...(r.fixedColumns||[]).flatMap((c:any)=>(c.musicResponsiveListItemFixedColumnRenderer?.text?.runs||[]).map((r:any)=>r.text))].find((v:string)=>/^\d+(:\d{2})+$/.test(v));const videoId=r.playlistItemData?.videoId||watchId(r.overlay)||watchId(r);const key=videoId||title+secondary[0];if(title&&!seen.has(key)){seen.add(key);tracks.push({title,artist:secondary[0]||'Unknown Artist',videoId,artworkUrl:r.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.slice(-1)[0]?.url,durationSeconds:duration?parseDurationToSeconds(duration):undefined});}return;}
+    const v=node.playlistVideoRenderer;if(v){const title=v.title?.runs?.map((r:any)=>r.text).join('')||v.title?.simpleText; if(title&&v.videoId&&!seen.has(v.videoId)){seen.add(v.videoId);tracks.push({title,artist:v.shortBylineText?.runs?.[0]?.text||'Unknown Artist',videoId:v.videoId,durationSeconds:parseDurationToSeconds(v.lengthText?.simpleText||''),artworkUrl:v.thumbnail?.thumbnails?.slice(-1)[0]?.url});}return;}
+    for(const value of Object.values(node))visit(value);
+  };visit(data);return {source:'ytmusic',sourceId,title:'YouTube Music playlist',tracks};
 }
 
 export async function fetchImportedPlaylist(
@@ -141,5 +163,5 @@ export async function fetchImportedPlaylist(
     throw new Error(data?.details || data?.error || `Playlist import failed (${res.status})`);
   }
   if (parsed.source === 'spotify') return parseSpotifyPlaylistResponse(data, parsed.id);
-  return { ...parseYtmPlaylistResponse(data?.raw, parsed.id), title: data?.title || 'YouTube Music playlist' };
+  return { ...(Array.isArray(data?.tracks) ? {source:parsed.source,sourceId:parsed.id,tracks:data.tracks} : parseYtmPlaylistResponse(data?.raw, parsed.id)), title: data?.title || 'YouTube Music playlist' };
 }

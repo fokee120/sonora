@@ -2,6 +2,7 @@ import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
+import { prepareOfflineApp } from './lib/offline/appShell.js';
 
 async function start() {
   // Retire workers installed by older dev builds without deleting the user's
@@ -22,6 +23,7 @@ async function start() {
       <App />
     </StrictMode>,
   );
+  void prepareOfflineApp();
 }
 
 void start();

@@ -1,4 +1,5 @@
 import React from 'react';
+import { motion } from 'motion/react';
 import { Home, Search, Library, HardDriveDownload, Settings } from 'lucide-react';
 import { useApp } from '../../context/AppContext.js';
 
@@ -6,7 +7,7 @@ export const MobileNavBar: React.FC = () => {
   const { route, navigate, storageInfo } = useApp();
 
   interface NavItem {
-    type: 'home' | 'search' | 'library' | 'downloads' | 'settings';
+    type: 'home' | 'search' | 'library';
     label: string;
     icon: React.ComponentType<{ className?: string }>;
     badge?: string;
@@ -16,31 +17,28 @@ export const MobileNavBar: React.FC = () => {
     { type: 'home', label: 'Home', icon: Home },
     { type: 'search', label: 'Search', icon: Search },
     { type: 'library', label: 'Library', icon: Library },
-    {
-      type: 'downloads',
-      label: 'Offline',
-      icon: HardDriveDownload,
-      badge: storageInfo?.trackCount ? `${storageInfo.trackCount}` : undefined,
-    },
-    { type: 'settings', label: 'Settings', icon: Settings },
   ];
 
   return (
     <nav
       id="mobile-bottom-nav"
-      className="mobile-bottom-nav md:hidden fixed left-0 right-0 bottom-0 flex items-center justify-around bg-black/85 backdrop-blur-xl border-t border-white/5 px-2 py-1.5 z-40 select-none"
+      aria-label="Main navigation"
+      className="mobile-bottom-nav md:hidden flex items-center justify-around px-2 select-none"
     >
       {items.map((item) => {
         const Icon = item.icon;
-        const isActive = route.type === item.type;
+        const isActive = route.type === item.type || (item.type === 'library' && ['album', 'albums', 'artist', 'artists', 'playlists', 'playlist', 'liked'].includes(route.type));
         return (
-          <button
+          <motion.button
             key={item.type}
             onClick={() => navigate({ type: item.type as any })}
-            className={`relative flex flex-col items-center justify-center py-1 px-3 rounded-xl transition ${
+            aria-current={isActive ? 'page' : undefined}
+            whileTap={{ scale: 0.92 }}
+            className={`mobile-nav-item relative flex flex-col items-center justify-center rounded-xl ${
               isActive ? 'text-blue-400 font-semibold' : 'text-zinc-500 hover:text-white'
             }`}
           >
+            {isActive && <motion.span className="nav-active-pill" layoutId="mobile-active-tab" transition={{ type: 'spring', stiffness: 420, damping: 34 }} />}
             <div className="relative">
               <Icon className="w-5 h-5" />
               {item.badge && (
@@ -49,8 +47,8 @@ export const MobileNavBar: React.FC = () => {
                 </span>
               )}
             </div>
-            <span className="text-[10px] mt-1">{item.label}</span>
-          </button>
+            <span className="relative text-[10px] mt-1">{item.label}</span>
+          </motion.button>
         );
       })}
     </nav>

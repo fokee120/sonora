@@ -14,6 +14,7 @@ import { useApp } from '../context/AppContext.js';
 import { usePlayer } from '../hooks/usePlayer.js';
 import { TrackRow } from '../components/common/TrackRow.js';
 import { offlineManager } from '../lib/offline/OfflineManager.js';
+import { OfflineReadiness } from '../components/common/OfflineReadiness.js';
 
 export const DownloadsView: React.FC = () => {
   const {
@@ -51,6 +52,7 @@ export const DownloadsView: React.FC = () => {
 
   return (
     <div id="downloads-view" className="space-y-8 pb-12">
+      <OfflineReadiness />
       {/* Header & Storage Gauge Card */}
       <div className="p-6 sm:p-8 rounded-3xl bg-zinc-900/60 border border-zinc-800/80 shadow-xl space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -59,9 +61,9 @@ export const DownloadsView: React.FC = () => {
               <HardDriveDownload className="w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold tracking-tight text-white">Offline Downloads</h1>
+              <h1 className="text-2xl font-bold tracking-tight text-white">Downloaded songs</h1>
               <p className="text-xs text-zinc-400">
-                IndexedDB Binary Audio Storage & Safari PWA Cache
+                Saved on this device
               </p>
             </div>
           </div>
@@ -96,7 +98,7 @@ export const DownloadsView: React.FC = () => {
               <p className="text-2xl font-bold font-mono text-emerald-400">
                 {storageInfo.trackCount}
               </p>
-              <p className="text-[11px] text-zinc-500">Stored in IndexedDB Audio Store</p>
+              <p className="text-[11px] text-zinc-500">Available without a connection</p>
             </div>
 
             <div className="p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 space-y-1">
@@ -119,20 +121,20 @@ export const DownloadsView: React.FC = () => {
                 <div className="flex items-center gap-1.5 mt-1">
                   <ShieldCheck
                     className={`w-4 h-4 ${
-                      storageInfo.isPersisted ? 'text-emerald-400' : 'text-amber-400'
+                      storageInfo.persisted ? 'text-emerald-400' : 'text-amber-400'
                     }`}
                   />
                   <span
                     className={`text-xs font-semibold ${
-                      storageInfo.isPersisted ? 'text-emerald-300' : 'text-amber-300'
+                      storageInfo.persisted ? 'text-emerald-300' : 'text-amber-300'
                     }`}
                   >
-                    {storageInfo.isPersisted ? 'Storage Protected' : 'Not Persisted'}
+                    {storageInfo.persisted ? 'Storage Protected' : 'Not Persisted'}
                   </span>
                 </div>
               </div>
 
-              {!storageInfo.isPersisted && (
+              {!storageInfo.persisted && (
                 <button
                   onClick={handleRequestPersist}
                   disabled={isPersisting}
@@ -149,7 +151,7 @@ export const DownloadsView: React.FC = () => {
         <div className="p-3.5 rounded-2xl bg-zinc-950/40 border border-zinc-800/50 text-xs text-zinc-400 flex items-start gap-3">
           <Smartphone className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
           <p className="leading-relaxed">
-            <strong>iOS & Safari PWA Optimization:</strong> Stored directly as raw binary blobs in IndexedDB. When added to your Home Screen as a standalone PWA, iOS grants persistent offline storage without Safari cache purge cycles.
+            <strong>On iPhone:</strong> Open the HTTPS address, add Sonora to your Home Screen, then open the installed app online and wait for “Ready to open offline” before disconnecting. Songs must be downloaded inside that app. Device storage can still be cleared by iOS or by clearing website data.
           </p>
         </div>
 
@@ -209,7 +211,7 @@ export const DownloadsView: React.FC = () => {
               <h3 className="text-base font-semibold">Clear All Downloads?</h3>
             </div>
             <p className="text-xs text-zinc-400 leading-relaxed">
-              This will remove all {downloadedTracks.length} cached audio blobs from IndexedDB. You can re-download them whenever you are connected to the internet.
+              This will remove all {downloadedTracks.length} downloaded audio files from this device. You can re-download them whenever you are connected to the internet.
             </p>
             <div className="flex items-center justify-end gap-3 mt-6">
               <button

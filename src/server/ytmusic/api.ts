@@ -7,6 +7,7 @@ import { matchingUploads } from './matchingUploads.js';
 import { audioBackendService } from './AudioBackendService.js';
 import { chromiumBridge } from '../bridge/ChromiumBridge.js';
 import { directDownloader } from '../bridge/DirectDownloader.js';
+import { TransferSlots } from './transferSlots.js';
 
 import { beginDownloadJob, readDownloadJob, reportDownloadJob, updateDownloadJob, validDownloadRequestId } from '../bridge/DownloadJobs.js';
 
@@ -17,7 +18,8 @@ const VALID_YT_VIDEO_ID = /^[\w-]{11}$/;
 const DEBUG_PERF = process.env.SONORA_DEBUG_PERF === 'true';
 // One process-wide pool, independent of optional progress IDs or browser sessions.
 // Hold slots through finalization, response streaming, and artifact disposal.
-const MAX_CONCURRENT_DIRECT_DOWNLOADS = 2;
+const MAX_CONCURRENT_DIRECT_DOWNLOADS = 20;
+const transferSlots = new TransferSlots(4);
 let activeDirectDownloads = 0;
 
 function logServerPerf(label: string, startedAt: number, extra?: Record<string, unknown>): void {
@@ -277,6 +279,10 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
       const ext = format === 'mp3' ? 'mp3' : 'webm';
       try {
         controller.signal.throwIfAborted();
+        if (jobId) updateDownloadJob(jobId, 'waiting_transfer');
+        const releaseTransfer = await transferSlots.acquire(controller.signal);
+        try {
+        controller.signal.throwIfAborted();
         if (jobId) updateDownloadJob(jobId, 'transferring');
         res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}.${ext}"`);
         res.setHeader('X-Audio-Complete', 'true');
@@ -284,6 +290,7 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
         res.setHeader('Content-Length', String(artifact.size));
         res.status(200);
         await pipeline(createReadStream(artifact.path), res, { signal: controller.signal });
+        } finally { releaseTransfer(); }
       } finally { await artifact.dispose(); }
       return;
     }

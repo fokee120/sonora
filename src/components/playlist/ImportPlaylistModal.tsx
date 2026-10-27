@@ -1,11 +1,14 @@
-import React, { useState } from 'react';
-import { X, Link2, Loader2, Check, AlertCircle } from 'lucide-react';
+import { startImport } from '../../lib/importJobs.js';
+import React, { useEffect, useId, useState } from 'react';
+import { Overlay } from '../common/Overlay.js';
+import { X, Link2, Loader2, Check, AlertCircle, FileUp } from 'lucide-react';
 import { useApp } from '../../context/AppContext.js';
 import {
   parsePlaylistUrl,
   fetchImportedPlaylist,
   type ImportedPlaylist,
   type ImportedTrack,
+  parsePlaylistFile,
 } from '../../lib/playlistImport.js';
 import { matchImportedTrack } from '../../lib/recommendations.js';
 import { cachedSearchYoutubeMusic } from '../../lib/ytmusic/youtubeMusic.js';
@@ -26,7 +29,7 @@ type Phase = 'url' | 'fetched' | 'matching' | 'done';
  */
 export const ImportPlaylistModal: React.FC<ImportPlaylistModalProps> = ({ isOpen, onClose }) => {
   const { createPlaylist, addTracksToLibrary, navigate } = useApp();
-  const [url, setUrl] = useState('');
+  const [url, setUrl] = useState(() => sessionStorage.getItem('sonora:import-url') || '');
   const [phase, setPhase] = useState<Phase>('url');
   const [error, setError] = useState<string | null>(null);
   const [imported, setImported] = useState<ImportedPlaylist | null>(null);
@@ -34,8 +37,22 @@ export const ImportPlaylistModal: React.FC<ImportPlaylistModalProps> = ({ isOpen
   const [unmatched, setUnmatched] = useState<ImportedTrack[]>([]);
   const [progress, setProgress] = useState('');
   const [createdId, setCreatedId] = useState<string | null>(null);
+  const titleId = useId();
+  const [spotify, setSpotify] = useState<{ configured: boolean; connected: boolean } | null>(null);
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    if (!isOpen) return;
+    const result = new URLSearchParams(location.search).get('spotify');
+    if (result) {
+      if (result === 'cancelled') setError('Spotify connection was cancelled. You can connect again.');
+      const clean = new URL(location.href); clean.searchParams.delete('spotify');
+      history.replaceState(null, '', clean.pathname + clean.search + clean.hash);
+    }
+    let active = true;
+    void fetch('/api/spotify/status').then(response => response.ok ? response.json() : null)
+      .then(value => { if (active) setSpotify(value); }).catch(() => {});
+    return () => { active = false; };
+  }, [isOpen]);
 
   const reset = () => {
     setPhase('url');
@@ -67,28 +84,20 @@ export const ImportPlaylistModal: React.FC<ImportPlaylistModalProps> = ({ isOpen
     }
   };
 
+  const handleFile = async (file?: File) => {
+    if (!file) return;
+    setError(null); setPhase('matching'); setProgress('Reading playlist file…');
+    try { const playlist = await parsePlaylistFile(file); setImported(playlist); setPhase('fetched'); setProgress(''); }
+    catch (err: any) { setError(err?.message || 'Could not read that playlist file.'); setPhase('url'); setProgress(''); }
+  };
+
   const handleMatch = async () => {
     if (!imported) return;
     setPhase('matching');
-    setError(null);
-    const found: Track[] = [];
-    const missing: ImportedTrack[] = [];
-    for (let i = 0; i < imported.tracks.length; i++) {
-      const entry = imported.tracks[i];
-      setProgress(`Matching ${i + 1} of ${imported.tracks.length}: ${entry.title} — ${entry.artist}`);
-      try {
-        const candidates = await cachedSearchYoutubeMusic(`${entry.title} ${entry.artist}`, 'songs');
-        const best = matchImportedTrack(entry, candidates);
-        if (best) found.push(best.track);
-        else missing.push(entry);
-      } catch {
-        missing.push(entry);
-      }
-    }
-    setMatched(found);
-    setUnmatched(missing);
-    setProgress('');
-    setPhase('done');
+    try {const playlist = await createPlaylist(imported.title, imported.description || `Imported from ${imported.source}`);
+    await startImport(playlist.id,imported);
+    navigate({type:'playlist',id:playlist.id}); onClose();reset();}
+    catch(error){setError(error instanceof Error?error.message:String(error));setPhase('fetched');}
   };
 
   const handleCreate = async () => {
@@ -96,49 +105,52 @@ export const ImportPlaylistModal: React.FC<ImportPlaylistModalProps> = ({ isOpen
     await addTracksToLibrary(matched);
     const playlist = await createPlaylist(
       imported.title,
-      `Imported from ${imported.source} (${imported.sourceId}). ${unmatched.length} track(s) could not be matched.`,
+      `Imported from ${imported.source} (${imported.sourceId}). ${unmatched.length} track(s) could not be matched.${imported.warning ? ' Public preview; playlist completeness is not verified.' : ''}`,
       matched.map((t) => t.id)
     );
     setCreatedId(playlist.id);
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-3xl bg-zinc-950 border border-zinc-800 shadow-2xl p-6 space-y-4"
-        onClick={(e) => e.stopPropagation()}>
+    <Overlay isOpen={isOpen} onClose={onClose} label="Import playlist">
+      <div className="p-4 sm:p-6 space-y-4">
         <div className="flex items-start justify-between">
           <div>
-            <h2 className="text-base font-bold text-white flex items-center gap-2"><Link2 className="w-4 h-4 text-indigo-400" /> Import playlist by URL</h2>
+            <h2 id={titleId} className="text-base font-bold text-white flex items-center gap-2"><Link2 className="w-4 h-4 text-indigo-400" /> Import playlist</h2>
             <p className="text-xs text-zinc-400 mt-1">
-              Paste a Spotify or YouTube Music playlist link. Spotify imports need
-              SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET on the Sonora host; YouTube Music
-              public playlists need no extra setup.
+              Paste a public Spotify or YouTube Music link, or import a local JSON/CSV file. Local files stay on this device.
             </p>
           </div>
-          <button onClick={onClose} className="text-zinc-400 hover:text-white"><X className="w-5 h-5" /></button>
+          <button aria-label="Close import" onClick={onClose} className="shrink-0 p-1 text-zinc-400 hover:text-white"><X className="w-5 h-5" /></button>
         </div>
 
+        {spotify && !spotify.connected && <div className="text-xs text-zinc-400">
+          {spotify.configured ? <a href="/api/spotify/login" onClick={() => sessionStorage.setItem('sonora:import-url', url)} className="font-semibold text-emerald-400">Connect Spotify</a>
+            : <p>Public playlist previews are available now. A full Spotify account connection needs host setup and a Premium app owner.</p>}
+        </div>}
         {phase === 'url' || phase === 'matching' ? (
-          <div className="flex gap-2">
-            <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://open.spotify.com/playlist/… or music.youtube.com/playlist?list=…"
-              className="flex-1 px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-zinc-100 placeholder:text-zinc-600" />
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input autoFocus aria-label="Playlist URL" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Spotify or YouTube Music playlist link"
+              className="min-w-0 flex-1 px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-base sm:text-sm text-zinc-100 placeholder:text-zinc-600" />
             <button onClick={handleFetch} disabled={phase === 'matching' || !url.trim()}
               className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold disabled:opacity-40 flex items-center gap-1.5">
               {phase === 'matching' && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Fetch
             </button>
           </div>
         ) : null}
+        {(phase === 'url' || phase === 'matching') && <div className="flex items-center gap-3"><label className="action-button cursor-pointer"><FileUp size={17} /> Choose JSON/CSV file<input className="sr-only" type="file" accept=".json,.csv,.tsv,application/json,text/csv" onChange={e => void handleFile(e.target.files?.[0])} /></label><span className="text-[11px] text-zinc-500">JSON, CSV, or TSV</span></div>}
         {progress && <p role="status" className="text-xs text-zinc-300">{progress}</p>}
         {error && <p role="alert" className="text-xs text-rose-400 flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5" /> {error}</p>}
 
         {imported && phase !== 'matching' && (
           <div className="space-y-3">
+            {imported.warning && <p role="note" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">{imported.warning}</p>}
             <p className="text-xs text-zinc-300">
               <span className="font-semibold text-white">{imported.title}</span> — {imported.tracks.length} tracks from {imported.source}
             </p>
             {phase === 'fetched' && (
               <button onClick={handleMatch} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">
-                Match to playable tracks
+                Import in background
               </button>
             )}
             {phase === 'done' && (
@@ -171,6 +183,6 @@ export const ImportPlaylistModal: React.FC<ImportPlaylistModalProps> = ({ isOpen
           </div>
         )}
       </div>
-    </div>
+    </Overlay>
   );
 };

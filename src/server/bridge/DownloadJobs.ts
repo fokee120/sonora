@@ -1,5 +1,5 @@
 export interface CaptureProgress {
-  phase: 'preparing' | 'fetching' | 'recording' | 'finalizing' | 'transferring' | 'failed' | 'cancelled';
+  phase: 'preparing' | 'fetching' | 'recording' | 'finalizing' | 'waiting_transfer' | 'transferring' | 'failed' | 'cancelled';
   downloadedBytes?: number;
   totalBytes?: number;
   progress: number;

@@ -1,6 +1,7 @@
 import React from 'react';
 import { X, Trash2, Play, Music2 } from 'lucide-react';
 import { usePlayer } from '../../hooks/usePlayer.js';
+import { Overlay } from '../common/Overlay.js';
 
 interface QueueDrawerProps {
   isOpen: boolean;
@@ -10,11 +11,9 @@ interface QueueDrawerProps {
 export const QueueDrawer: React.FC<QueueDrawerProps> = ({ isOpen, onClose }) => {
   const { queue, currentTrack, playTrack, removeFromQueue, clearQueue } = usePlayer();
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-xs">
-      <div className="w-full max-w-md bg-zinc-950 border-l border-zinc-800/80 h-full flex flex-col shadow-2xl p-5 text-zinc-100">
+    <Overlay isOpen={isOpen} onClose={onClose} label="Play Queue" variant="drawer">
+      <div className="min-h-0 flex-1 flex flex-col p-5 text-zinc-100">
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-zinc-800/80">
           <div className="flex items-center gap-2">
@@ -35,6 +34,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({ isOpen, onClose }) => 
             )}
             <button
               onClick={onClose}
+              aria-label="Close queue"
               className="p-1 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 transition"
             >
               <X className="w-5 h-5" />
@@ -66,7 +66,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({ isOpen, onClose }) => 
         )}
 
         {/* Upcoming List */}
-        <div className="flex-1 overflow-y-auto space-y-1 pr-1">
+        <div className="min-h-0 flex-1 overflow-y-auto space-y-1 pr-1">
           <span className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 block mb-2 px-1">
             Next Up
           </span>
@@ -131,6 +131,6 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({ isOpen, onClose }) => 
           )}
         </div>
       </div>
-    </div>
+    </Overlay>
   );
 };

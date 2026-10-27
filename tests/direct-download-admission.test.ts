@@ -20,7 +20,7 @@ for (const outcome of ['success', 'error', 'cancel'] as const) test(`shared down
   const path = join(root, 'audio.webm');
   await writeFile(path, 'fixture');
   const pending: Array<ReturnType<typeof deferred<DownloadArtifact>>> = [];
-  const entered = [deferred(), deferred(), deferred()];
+  const entered = Array.from({ length: 21 }, () => deferred());
   const disposed = deferred(), allowDispose = deferred();
   let probingCapacity = false;
   directDownloader.download = async (_id, signal) => {
@@ -43,13 +43,15 @@ for (const outcome of ['success', 'error', 'cancel'] as const) test(`shared down
   // A progress-bearing request shares the same pool as anonymous downloads.
   const second = fetch(`${url}?session=admission&requestId=12345678-1234-4234-8234-${outcome === 'success' ? '111111111111' : outcome === 'error' ? '222222222222' : '333333333333'}`);
   await entered[1].promise;
+  const extra = Array.from({ length: 18 }, () => fetch(url));
+  await Promise.all(entered.slice(2, 20).map(item => item.promise));
   try {
     probingCapacity = true;
     const rejected = await fetch(url);
     probingCapacity = false;
     assert.equal(rejected.status, 503);
     await rejected.text();
-    assert.equal(pending.length, 2, 'capacity rejection must not invoke the downloader');
+    assert.equal(pending.length, 20, 'capacity rejection must not invoke the downloader');
     if (outcome === 'success') {
       pending[0].resolve(artifact(true));
       assert.equal((await first).status, 200);
@@ -69,9 +71,9 @@ for (const outcome of ['success', 'error', 'cancel'] as const) test(`shared down
     let recovered: Response | undefined;
     for (let attempt = 0; attempt < 50; attempt++) {
       const responsePromise = fetch(url);
-      const result = await Promise.race([entered[2].promise.then(() => 'admitted' as const), responsePromise]);
+      const result = await Promise.race([entered[20].promise.then(() => 'admitted' as const), responsePromise]);
       if (result === 'admitted') {
-        pending[2].resolve(artifact());
+        pending[20].resolve(artifact());
         recovered = await responsePromise;
         break;
       }
@@ -85,6 +87,7 @@ for (const outcome of ['success', 'error', 'cancel'] as const) test(`shared down
     for (const slot of pending) slot.resolve(artifact());
     await first;
     const response = await second; await response.text();
+    for (const response of await Promise.all(extra)) await response.text();
     await new Promise<void>(resolve => server.close(() => resolve()));
     directDownloader.download = original;
     await rm(root, { recursive: true, force: true });
@@ -108,18 +111,30 @@ test('download admission remains occupied during response streaming and releases
   await new Promise<void>(resolve => server.once('listening', resolve));
   const url = `http://127.0.0.1:${(server.address() as any).port}/api/ytmusic/download/abcdefghijk`;
   const clients: ReturnType<typeof get>[] = [];
+  let waitingResponses = 0;
   try {
-    for (let index = 0; index < 2; index++) {
+    for (let index = 0; index < 4; index++) {
       await new Promise<void>((resolve, reject) => {
         const client = get(url, response => { response.pause(); resolve(); });
         client.on('error', reject); clients.push(client);
       });
     }
+    for (let index = 0; index < 16; index++) {
+      const client = get(url, response => { waitingResponses++; response.pause(); });
+      client.on('error', () => {}); clients.push(client);
+    }
+    for (let attempt = 0; calls < 20 && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(calls, 20, 'all twenty downloads can prepare while only four are transferring');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(waitingResponses, 0, 'no fifth transfer may start while four are active');
     const full = await fetch(url);
     assert.equal(full.status, 503); await full.text();
-    assert.equal(calls, 2, 'completed provider work must not release a still-streaming slot');
+    assert.equal(calls, 20, 'completed provider work must not release a still-streaming slot');
     clients[0].destroy();
     await disposed.promise;
+    for (let attempt = 0; waitingResponses === 0 && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok(waitingResponses > 0, 'a waiting transfer starts when a slot is released');
+    for (const client of clients.slice(1)) client.destroy();
     const recovered = await fetch(url);
     assert.equal(recovered.status, 200);
     await recovered.arrayBuffer();

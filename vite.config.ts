@@ -11,12 +11,14 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
+        // Register from the app so users can see when offline installation is ready.
+        injectRegister: false,
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
         manifest: {
           id: '/',
           name: 'Personal Music Player',
           short_name: 'MusicPlayer',
-          description: 'Personal music streaming player with offline audio playback and Cloudflare R2 storage',
+          description: 'Music discovery, playlists, and offline listening with Sonora',
           theme_color: '#09090b',
           background_color: '#09090b',
           display: 'standalone',
@@ -44,6 +46,8 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
+          clientsClaim: true,
+          skipWaiting: true,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
           cleanupOutdatedCaches: true,
           navigateFallback: '/index.html',

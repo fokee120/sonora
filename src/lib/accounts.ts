@@ -1,23 +1,4 @@
-/**
- * Sonora accounts.
- *
- * The account identity is the Google identity from Firebase Auth
- * (see src/lib/googleAuth.ts). Firebase Auth persistence is
- * browser-local and survives server restarts and downtime: the
- * Firebase SDK refreshes its own tokens, and Sonora never stores a
- * Google access/refresh token in its account record.
- *
- * What lives in a Sonora account record:
- *  - profile: who signed in (uid, email, display name, photo)
- *  - preferences: explicit taste the user typed in (genres, artists, vibes)
- *  - imported playlists: metadata only (source, source id, title, counts)
- *
- * Preferences/profile are stored in IndexedDB on this device
- * (via dbService settings) and, best-effort, mirrored to the
- * persistent host's account store (POST /api/accounts/sync) so a
- * server restart does not lose them either. The mirror never
- * contains tokens or audio bytes.
- */
+/** Local listening preferences and legacy profile parsing. Authentication is no longer part of Sonora. */
 
 export interface SonoraAccountProfile {
   uid: string;

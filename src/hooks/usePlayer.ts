@@ -25,6 +25,7 @@ export function usePlayer() {
     togglePlay: () => playerEngine.togglePlay(),
     next: () => playerEngine.next(),
     previous: () => playerEngine.previous(),
+    previousSong: () => playerEngine.previous(true),
     seek: (time: number) => playerEngine.seek(time),
     setVolume: (vol: number) => playerEngine.setVolume(vol),
     toggleMute: () => playerEngine.toggleMute(),

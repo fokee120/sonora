@@ -94,7 +94,7 @@ export const PWAInstallButton: React.FC<{ variant?: 'sidebar' | 'banner' | 'comp
                   3
                 </div>
                 <p>
-                  Tap <strong>Add</strong> in the top-right corner. The app will launch in standalone full-screen mode with persistent offline playback!
+                  Tap <strong>Add</strong> in the top-right corner. Open the installed app while online and visit Downloads. Wait for <strong>Ready to open offline</strong>, then download your songs there.
                 </p>
               </div>
             </div>

@@ -1,4 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { useSwipeGesture } from '../../hooks/useSwipeGesture.js';
+import { AddToPlaylistSheet } from '../playlist/AddToPlaylistSheet.js';
+import { Artwork } from './Artwork.js';
+import { Overlay } from './Overlay.js';
 import {
   Play,
   Pause,
@@ -10,13 +14,11 @@ import {
   Plus,
   ListPlus,
   Trash2,
-  Youtube,
 } from 'lucide-react';
 import { Track } from '../../types/index.js';
 import { useApp } from '../../context/AppContext.js';
 import { usePlayer } from '../../hooks/usePlayer.js';
 import { offlineManager } from '../../lib/offline/OfflineManager.js';
-import { isYoutubeTrack } from '../../lib/ytmusic/youtubeMusic.js';
 import { playUiSound } from '../../lib/uiFeedback.js';
 
 interface TrackRowProps {
@@ -24,13 +26,50 @@ interface TrackRowProps {
   index: number;
   tracksContext?: Track[];
   showAlbum?: boolean;
+  reason?: string;
 }
 
-export const TrackRow: React.FC<TrackRowProps> = ({
+type RowObserverState = { update: (visible: boolean) => void };
+const observedRows = new Map<Element, RowObserverState>();
+let preloadObserver: IntersectionObserver | null = null;
+let viewportObserver: IntersectionObserver | null = null;
+let fastScrollUntil = 0;
+const scrollPositions = new WeakMap<Element, { top: number; time: number }>();
+function watchRowScroll(event: Event) {
+  const element = event.target;
+  if (!(element instanceof Element)) return;
+  const now = performance.now(), top = element.scrollTop, previous = scrollPositions.get(element);
+  if (previous && Math.abs(top - previous.top) > 12 && Math.abs(top - previous.top) / Math.max(1, now - previous.time) > 0.65) fastScrollUntil = now + 240;
+  scrollPositions.set(element, { top, time: now });
+}
+function observeSongRow(element: HTMLElement, update: (visible: boolean) => void) {
+  if (!preloadObserver) {
+    document.addEventListener('scroll', watchRowScroll, true);
+    preloadObserver = new IntersectionObserver(entries => { for (const entry of entries) observedRows.get(entry.target)?.update(entry.isIntersecting); }, { rootMargin: '800px 0px' });
+    viewportObserver = new IntersectionObserver(entries => { for (const entry of entries) { const row = entry.target as HTMLElement; if (!entry.isIntersecting) row.classList.remove('track-row-arriving'); else if (performance.now() < fastScrollUntil && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) row.classList.add('track-row-arriving'); } });
+  }
+  observedRows.set(element, { update }); preloadObserver.observe(element); viewportObserver!.observe(element);
+  return () => { preloadObserver?.unobserve(element); viewportObserver?.unobserve(element); observedRows.delete(element); if (!observedRows.size) { preloadObserver?.disconnect(); viewportObserver?.disconnect(); preloadObserver = null; viewportObserver = null; document.removeEventListener('scroll', watchRowScroll, true); fastScrollUntil = 0; } };
+}
+
+export const TrackRow: React.FC<TrackRowProps> = (props) => {
+  const holder = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  const [height, setHeight] = useState(68);
+  useEffect(() => {
+    const element = holder.current;
+    if (!element || typeof IntersectionObserver === 'undefined') { setVisible(true); return; }
+    return observeSongRow(element, isVisible => { if (isVisible) setVisible(true); else { const measured = element.getBoundingClientRect().height; if (measured > 0) setHeight(measured); setVisible(false); } });
+  }, []);
+  return <div ref={holder} data-track-id={props.track.id} className="track-row-slot" onAnimationEnd={event => { if (event.target === event.currentTarget && event.animationName === 'track-row-arrive') event.currentTarget.classList.remove('track-row-arriving'); }} style={!visible ? { minHeight: height } : undefined}>{visible && <TrackRowContent {...props}/>}</div>;
+};
+
+const TrackRowContent: React.FC<TrackRowProps> = ({
   track,
   index,
   tracksContext,
   showAlbum = true,
+  reason,
 }) => {
   const {
     isFavorite,
@@ -49,16 +88,23 @@ export const TrackRow: React.FC<TrackRowProps> = ({
   const [showMenu, setShowMenu] = useState(false);
   const [showPlaylistsSubmenu, setShowPlaylistsSubmenu] = useState(false);
   const [downloadPulse, setDownloadPulse] = useState(0);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const swipeFrame = useRef<number | null>(null);
+  useEffect(() => () => { if (swipeFrame.current !== null) cancelAnimationFrame(swipeFrame.current); }, []);
+  const [picker, setPicker] = useState(false);
+  const [notice, setNotice] = useState('');
+  useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 2000); return () => clearTimeout(timer); }, [notice]);
+  const songGestures = useSwipeGesture({ lockHorizontal: true, maxDrag: 10000, onDrag: offset => { const row = rowRef.current; if (!row) return; if (swipeFrame.current !== null) cancelAnimationFrame(swipeFrame.current); if (offset === 0) { swipeFrame.current = null; row.style.transition = 'transform .28s cubic-bezier(.2,.8,.2,1)'; row.style.transform = 'translate3d(0,0,0)'; } else { row.style.transition = 'none'; row.style.willChange = 'transform'; swipeFrame.current = requestAnimationFrame(() => { if (rowRef.current) rowRef.current.style.transform = `translate3d(${offset}px,0,0)`; swipeFrame.current = null; }); } }, exclude: 'button, a, [data-sonora-overlay]', onRight: () => { addToQueue(track); setNotice('Added to queue'); }, onLeft: () => setPicker(true) });
 
   const isCurrent = currentTrack?.id === track.id;
   const isCurrentlyPlaying = isCurrent && isPlaying;
-  const isYoutube = isYoutubeTrack(track);
   const downloaded = isDownloaded(track.id);
   const downloading = isDownloading(track.id);
   const downloadState = offlineManager.getDownloadState(track.id);
   const favorite = isFavorite(track.id);
 
   const handlePlayClick = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('[data-sonora-overlay]')) return;
     e.stopPropagation();
     playUiSound('tap');
     if (isCurrent) {
@@ -91,10 +137,17 @@ export const TrackRow: React.FC<TrackRowProps> = ({
   };
 
   return (
+    <div className="song-row-shell relative overflow-hidden">
+    <div aria-hidden="true" className="absolute inset-0 flex items-center justify-between px-5"><ListPlus size={24} className="text-emerald-400"/><Plus size={24} className="text-blue-400"/></div>
     <div
+      ref={rowRef}
+      style={{backgroundColor:isCurrent?'#1a202b':'#101014',touchAction:'pan-y'}}
+      onTransitionEnd={event => { if (event.target === event.currentTarget && event.propertyName === 'transform') event.currentTarget.style.willChange = ''; }}
+      {...songGestures}
+      data-song-swipe
       id={`track-row-${track.id}`}
       onClick={handlePlayClick}
-      className={`track-row group relative flex items-center gap-3 px-4 py-3 rounded-xl transition cursor-pointer select-none ${
+      className={`track-row group relative flex items-center gap-3 px-4 py-3 transition cursor-pointer select-none ${
         isCurrent
           ? 'bg-white/[0.07] text-white shadow-xs'
           : 'hover:bg-white/[0.05] text-zinc-300 hover:text-white'
@@ -124,38 +177,16 @@ export const TrackRow: React.FC<TrackRowProps> = ({
       </div>
 
       {/* Artwork thumbnail */}
-      <div className="relative w-10 h-10 rounded-lg overflow-hidden shrink-0 bg-zinc-900 border border-white/10">
-        <img
-          src={track.artworkUrl || '/icon.svg'}
+      <div className="relative w-12 h-12 rounded-lg overflow-hidden shrink-0 bg-zinc-900 border border-white/10">
+        <Artwork
+          track={track}
           alt={track.album}
           className="w-full h-full object-cover"
-          loading="lazy"
-          decoding="async"
-          referrerPolicy="no-referrer"
-          onError={(e) => {
-            (e.target as HTMLImageElement).src = '/icon.svg';
-          }}
         />
-        {downloaded && (
-          <div
-            className="absolute bottom-0.5 right-0.5 bg-emerald-500 rounded-full p-0.5 text-zinc-950 shadow-xs"
-            title="Stored Offline"
-          >
-            <CheckCircle2 className="w-2.5 h-2.5 stroke-[3]" />
-          </div>
-        )}
-        {isYoutube && !downloaded && (
-          <div
-            className="absolute top-0.5 left-0.5 bg-red-600/90 rounded-sm px-0.5 flex items-center justify-center"
-            title="From YouTube Music"
-          >
-            <Youtube className="w-2.5 h-2.5 text-white" />
-          </div>
-        )}
       </div>
 
       {/* Track Title & Artist */}
-      <div className="flex-1 min-w-0 pr-2">
+      <div className="song-row-copy flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <p
             className={`text-sm font-medium truncate ${
@@ -176,6 +207,7 @@ export const TrackRow: React.FC<TrackRowProps> = ({
             <span className="text-zinc-600 hidden md:inline"> • {track.album}</span>
           )}
         </p>
+        {reason && <p className="text-[11px] text-zinc-500 truncate mt-0.5">{reason}</p>}
         {downloadState?.status === 'failed' && (
           <p role="alert" className="text-xs text-rose-300 mt-1 break-words">
             {downloadState.error || 'Download failed. Please try again.'}
@@ -187,6 +219,7 @@ export const TrackRow: React.FC<TrackRowProps> = ({
               : downloadState?.phase === 'fetching' ? `Downloading audio file${downloadState.sourceTotalBytes ? ` · ${formatBytes(downloadState.sourceBytesDownloaded || 0)} / ${formatBytes(downloadState.sourceTotalBytes)}` : ''}`
               : downloadState?.phase === 'recording' ? `Recording ${formatDuration(downloadState.recordedSeconds || 0)} / ${formatDuration(downloadState.sourceDuration || 0)}`
               : downloadState?.phase === 'finalizing' ? 'Finalizing full audio file'
+              : downloadState?.phase === 'waiting_transfer' ? 'Waiting to transfer to this device'
               : downloadState?.phase === 'transferring' ? 'Saving audio to this device'
               : downloadState?.phase === 'validating' ? 'Verifying complete audio before saving'
               : 'Preparing audio download'}
@@ -202,7 +235,7 @@ export const TrackRow: React.FC<TrackRowProps> = ({
       )}
 
       {/* Download Action & Progress */}
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="song-row-actions flex items-center gap-2 shrink-0">
         {downloading ? (
           <button
             className="flex items-center gap-1 text-[11px] text-blue-400 bg-blue-950/50 px-2 py-1 rounded-md border border-blue-800/40"
@@ -212,13 +245,13 @@ export const TrackRow: React.FC<TrackRowProps> = ({
           >
             <Loader2 className="w-3 h-3 animate-spin text-blue-400" />
             <span className="font-mono">{downloadState?.progress || 0}%</span>
-            <span>Cancel</span>
+            <span className="hidden sm:inline">Cancel</span>
           </button>
         ) : downloaded ? (
           <button
             key={`downloaded-${downloadPulse}`}
             onClick={handleDownloadToggle}
-            className="download-pop p-1.5 text-emerald-400 hover:text-rose-400 rounded-lg transition active:scale-90"
+            className="p-1.5 text-emerald-400 hover:text-rose-400 rounded-lg transition active:scale-90"
             title="Downloaded offline. Click to remove from local storage."
           >
             <CheckCircle2 className="w-4 h-4" />
@@ -255,7 +288,7 @@ export const TrackRow: React.FC<TrackRowProps> = ({
         </button>
 
         {/* Duration */}
-        <span className="text-xs font-mono text-zinc-500 w-10 text-right">
+        <span className={`text-xs font-mono text-zinc-500 w-10 text-right ${downloading ? 'hidden sm:inline' : ''}`}>
           {formatDuration(track.duration)}
         </span>
 
@@ -272,9 +305,9 @@ export const TrackRow: React.FC<TrackRowProps> = ({
             <MoreHorizontal className="w-4 h-4" />
           </button>
 
-          {showMenu && (
+          {showMenu && <Overlay isOpen onClose={() => { setShowMenu(false); setShowPlaylistsSubmenu(false); }} label={`Options for ${track.title}`}>
             <div
-              className="absolute right-0 top-8 z-40 w-48 rounded-xl bg-black/90 border border-white/10 p-1.5 shadow-2xl text-xs text-zinc-200 backdrop-blur-xl"
+              className="w-full p-4 space-y-1 text-sm text-zinc-200"
               onClick={(e) => e.stopPropagation()}
             >
               <button
@@ -351,9 +384,11 @@ export const TrackRow: React.FC<TrackRowProps> = ({
                 </button>
               )}
             </div>
-          )}
+          </Overlay>}
         </div>
       </div>
-    </div>
+      {notice && <span role="status" className="song-notice">{notice}</span>}
+      {picker && <AddToPlaylistSheet track={track} isOpen onClose={() => setPicker(false)} />}
+    </div></div>
   );
 };

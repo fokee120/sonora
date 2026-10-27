@@ -1,4 +1,7 @@
-import React, { useState } from 'react';
+import {ImportProgressAuto as ImportProgress} from '../components/playlist/ImportProgressAuto.js';
+import { PlaylistTools } from '../components/playlist/PlaylistTools.js';
+import { PlaylistSuggestions } from '../components/playlist/PlaylistSuggestions.js';
+import React, { useState, useEffect } from 'react';
 import {
   ArrowLeft,
   Play,
@@ -23,6 +26,7 @@ interface PlaylistDetailViewProps {
 export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({ playlistId }) => {
   const {
     playlists,
+    updatePlaylist,
     displayTracks,
     tracks: allTracks,
     deletePlaylist,
@@ -34,11 +38,14 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({ playlist
     isOnline,
   } = useApp();
 
-  const { playTrack, setQueue } = usePlayer();
+  const { playTrack, setQueue, currentTrack } = usePlayer();
   const [showAddModal, setShowAddModal] = useState(false);
   const [searchFilter, setSearchFilter] = useState('');
+  const [, setDownloadRevision] = useState(0);
+  useEffect(() => offlineManager.subscribe(() => setDownloadRevision(n => n + 1)), []);
 
   const playlist = playlists.find((p) => p.id === playlistId);
+  useEffect(()=>{if(currentTrack&&playlist?.trackIds.includes(currentTrack.id))void updatePlaylist(playlistId,{lastPlayedAt:Date.now()});},[playlistId,currentTrack?.id]);
 
   if (!playlist) {
     return (
@@ -62,9 +69,14 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({ playlist
   const allDownloaded =
     playlistTracks.length > 0 &&
     playlistTracks.every((t) => offlineManager.isTrackDownloaded(t.id));
+  const downloadingCount = playlistTracks.filter(t => offlineManager.isTrackDownloading(t.id)).length;
+  const downloadedCount = playlistTracks.filter(t => offlineManager.isTrackDownloaded(t.id)).length;
+  const failedCount = playlistTracks.filter(t => offlineManager.getDownloadState(t.id)?.status === 'failed').length;
 
   const handlePlayPlaylist = (shuffle = false) => {
     if (playlistTracks.length === 0) return;
+    void updatePlaylist(playlist.id,{lastPlayedAt:Date.now()});
+    if(shuffle)for(let i=playlistTracks.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[playlistTracks[i],playlistTracks[j]]=[playlistTracks[j],playlistTracks[i]];}
     setQueue(playlistTracks, playlistTracks[0]);
     playTrack(playlistTracks[0], playlistTracks);
   };
@@ -102,17 +114,21 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({ playlist
         <ArrowLeft className="w-4 h-4" />
         <span>Back</span>
       </button>
-
       {/* Playlist Hero */}
-      <div className="flex flex-col sm:flex-row items-center sm:items-end gap-6 p-6 rounded-3xl bg-gradient-to-b from-indigo-950/40 via-zinc-900 to-zinc-950 border border-zinc-800/80 shadow-xl">
+      <div className="playlist-hero-enter relative flex flex-col sm:flex-row items-center sm:items-end gap-6 p-6 pt-16 rounded-3xl bg-gradient-to-b from-indigo-950/40 via-zinc-900 to-zinc-950 border border-zinc-800/80 shadow-xl">
+      <div className="absolute top-3 left-3 flex items-center gap-1" aria-label="Playlist actions">
+        <PlaylistTools playlist={playlist}/>
+        <button className="player-icon" aria-label="Add songs" title="Add songs" onClick={() => setShowAddModal(true)}><Plus size={20}/></button>
+        {playlistTracks.length > 0 && <button className="player-icon relative" aria-label={downloadingCount ? `Cancel playlist downloads, ${downloadedCount} of ${playlistTracks.length} complete` : allDownloaded ? 'Remove playlist download' : 'Download playlist'} title={downloadingCount ? 'Cancel playlist downloads' : allDownloaded ? 'Remove playlist download' : 'Download playlist'} disabled={!isOnline && !allDownloaded && !downloadingCount} onClick={() => downloadingCount ? offlineManager.cancelPlaylistDownloads(playlist) : void handleDownloadToggle()}>{allDownloaded ? <CheckCircle2 size={19}/> : <Download size={19}/>}</button>}
+        {downloadingCount > 0 && <span role="status" className="text-xs text-blue-300">{downloadedCount}/{playlistTracks.length}</span>}
+        {failedCount > 0 && <span className="text-xs text-rose-400">{failedCount} failed</span>}
+      </div>
+
         <div className="w-40 h-40 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-indigo-400 shadow-2xl shrink-0">
-          <ListMusic className="w-16 h-16 opacity-80" />
+          {playlist.artworkUrl?<img src={playlist.artworkUrl} alt={playlist.title} className="w-full h-full object-cover rounded-2xl"/>:<ListMusic className="w-16 h-16 opacity-80" />}
         </div>
 
         <div className="flex-1 min-w-0 text-center sm:text-left space-y-2">
-          <span className="text-[11px] font-semibold uppercase tracking-widest text-indigo-400">
-            Playlist
-          </span>
           <h1 className="text-2xl sm:text-4xl font-bold tracking-tight text-white truncate">
             {playlist.title}
           </h1>
@@ -143,40 +159,6 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({ playlist
               <span>Shuffle</span>
             </button>
 
-            {/* Download Playlist */}
-            {playlistTracks.length > 0 && (
-              <button
-                onClick={handleDownloadToggle}
-                disabled={!isOnline && !allDownloaded}
-                className={`px-4 py-2.5 rounded-xl font-medium text-xs flex items-center gap-2 border transition ${
-                  allDownloaded
-                    ? 'bg-emerald-950/60 border-emerald-800/60 text-emerald-400 hover:bg-rose-950/40 hover:text-rose-400 hover:border-rose-800/40'
-                    : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:text-white hover:bg-zinc-800'
-                }`}
-              >
-                {allDownloaded ? (
-                  <>
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>Downloaded</span>
-                  </>
-                ) : (
-                  <>
-                    <Download className="w-4 h-4" />
-                    <span>Download Playlist</span>
-                  </>
-                )}
-              </button>
-            )}
-
-            {/* Add Songs */}
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="px-4 py-2.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 font-medium text-xs flex items-center gap-1.5 transition"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Add Songs</span>
-            </button>
-
             {/* Delete Playlist */}
             <button
               onClick={handleDelete}
@@ -189,6 +171,7 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({ playlist
         </div>
       </div>
 
+      {playlist.source&&<ImportProgress playlistId={playlist.id}/>}
       {/* Playlist Tracks Table */}
       <div className="space-y-2">
         <div className="flex items-center justify-between px-4 py-2 text-xs font-semibold uppercase tracking-wider text-zinc-500 border-b border-zinc-900">
@@ -206,11 +189,11 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({ playlist
               onClick={() => setShowAddModal(true)}
               className="mt-3 px-4 py-2 rounded-xl bg-indigo-600 text-white font-medium hover:bg-indigo-500 transition"
             >
-              Add songs from vault
+              Add saved songs
             </button>
           </div>
         ) : (
-          <div className="divide-y divide-zinc-900/60">
+          <div className="song-list">
             {playlistTracks.map((track, idx) => (
               <div key={track.id} className="relative group">
                 <TrackRow
@@ -232,6 +215,7 @@ export const PlaylistDetailView: React.FC<PlaylistDetailViewProps> = ({ playlist
         )}
       </div>
 
+      <PlaylistSuggestions playlist={playlist}/>
       {/* Add Songs Modal */}
       {showAddModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4">

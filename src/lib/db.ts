@@ -27,6 +27,7 @@ export interface SettingItem {
 }
 
 export interface MusicDBSchema extends DBSchema {
+  autoAudio: { key: string; value: { trackId: string; bytes: ArrayBuffer; mimeType: string; size: number; cachedAt: number; lastPlayedAt: number } };
   tracks: {
     key: string;
     value: Track;
@@ -77,7 +78,7 @@ export interface MusicDBSchema extends DBSchema {
 }
 
 const DB_NAME = 'personal-music-player-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise: Promise<IDBPDatabase<MusicDBSchema>> | null = null;
 
@@ -125,6 +126,7 @@ export function getDB(): Promise<IDBPDatabase<MusicDBSchema>> {
           const favoritesStore = db.createObjectStore('favorites', { keyPath: 'trackId' });
           favoritesStore.createIndex('by-addedAt', 'addedAt');
         }
+        if (oldVersion < 2) db.createObjectStore('autoAudio', { keyPath: 'trackId' });
       },
     });
   }
@@ -258,6 +260,11 @@ export const dbService = {
     await db.put('playlists', playlist);
   },
 
+  async mutatePlaylist(id: string, change: (playlist: Playlist) => Playlist): Promise<Playlist | undefined> {
+    const db = await getDB(); const tx=db.transaction('playlists','readwrite'); const current=await tx.store.get(id);
+    if(!current){await tx.done;return;} const updated=change(current);await tx.store.put(updated);await tx.done;return updated;
+  },
+
   async deletePlaylist(id: string): Promise<void> {
     const db = await getDB();
     await db.delete('playlists', id);
@@ -291,9 +298,21 @@ export const dbService = {
     const db = await getDB();
     const id = `${Date.now()}_${trackId}`;
     await db.put('history', { id, trackId, playedAt: Date.now() });
+    window.dispatchEvent(new Event('sonora:history-changed'));
   },
 
   async getRecentHistory(limit = 30): Promise<HistoryItem[]> {
+    const db = await getDB();
+    const all = await db.getAllFromIndex('history', 'by-playedAt');
+    const seen = new Set<string>();
+    return all.reverse().filter(item => {
+      if (seen.has(item.trackId)) return false;
+      seen.add(item.trackId);
+      return true;
+    }).slice(0, limit);
+  },
+
+  async getPlayHistory(limit = 300): Promise<HistoryItem[]> {
     const db = await getDB();
     const all = await db.getAllFromIndex('history', 'by-playedAt');
     return all.reverse().slice(0, limit);

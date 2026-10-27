@@ -3,6 +3,7 @@ import { X, ListMusic, Plus, Search, Check, Sparkles, Youtube, Loader2 } from 'l
 import { useApp } from '../../context/AppContext.js';
 import { fetchYoutubeTrack } from '../../lib/ytmusic/youtubeMusic.js';
 import { playUiSound } from '../../lib/uiFeedback.js';
+import { Overlay } from '../common/Overlay.js';
 
 interface CreatePlaylistModalProps {
   isOpen: boolean;
@@ -50,8 +51,6 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
         (t.album && t.album.toLowerCase().includes(q))
     );
   }, [tracks, searchQuery]);
-
-  if (!isOpen) return null;
 
   const toggleTrack = (id: string) => {
     playUiSound('toggle');
@@ -140,10 +139,10 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+    <Overlay isOpen={isOpen} onClose={onClose} label="Create New Playlist">
       <div
         id="create-playlist-dialog"
-        className="w-full max-w-lg rounded-3xl bg-zinc-900 border border-zinc-800 shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-150"
+        className="min-h-0 flex flex-col overflow-hidden"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800/80 bg-zinc-950/40">
@@ -153,7 +152,7 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
             </div>
             <div>
               <h2 className="text-sm font-bold text-white">Create New Playlist</h2>
-              <p className="text-[11px] text-zinc-400">Add songs from your Google Drive audio library</p>
+              <p className="text-[11px] text-zinc-400">Choose songs for your playlist</p>
             </div>
           </div>
           <button
@@ -353,6 +352,6 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
           </button>
         </div>
       </div>
-    </div>
+    </Overlay>
   );
 };

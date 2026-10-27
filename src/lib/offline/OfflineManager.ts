@@ -4,6 +4,7 @@ import { IAudioStorage } from './IAudioStorage.js';
 import { IndexedDBAudioStorage } from './IndexedDBAudioStorage.js';
 import { fetchTrackAudio } from '../audio/audioSource.js';
 import { validateAudioBlob } from './audioCompleteness.js';
+import { cacheArtwork } from '../artwork.js';
 
 type Listener = () => void;
 
@@ -12,9 +13,12 @@ export class OfflineManager {
   public audioStorage: IAudioStorage;
   private activeControllers = new Map<string, AbortController>();
   private downloadQueue: Track[] = [];
-  private isProcessingQueue = false;
+  private runningDownloads = 0;
+  private readonly maxConcurrentDownloads = 20;
   private listeners: Set<Listener> = new Set();
   private downloadsCache = new Map<string, DownloadState>();
+  private playlistBatches = new Map<string, { cancelled: boolean }>();
+  private notificationTimer: ReturnType<typeof setTimeout> | null = null;
 
   private constructor() {
     this.audioStorage = new IndexedDBAudioStorage();
@@ -33,9 +37,15 @@ export class OfflineManager {
       await this.requestPersistentStorageOnce();
       const records = await dbService.getAllDownloads();
       for (const record of records) {
-        this.downloadsCache.set(record.trackId, record);
+        if (this.downloadsCache.has(record.trackId)) continue;
+        if (record.status === 'queued' || record.status === 'downloading') {
+          const track = await dbService.getTrack(record.trackId);
+          if (track) { const queued = { ...record, status: 'queued' as const, progress: 0 }; this.downloadsCache.set(record.trackId, queued); this.downloadQueue.push(track); await dbService.saveDownloadState(queued); }
+          else { const failed = { ...record, status: 'failed' as const, error: 'Song information is missing. Search for it again.' }; this.downloadsCache.set(record.trackId, failed); await dbService.saveDownloadState(failed); }
+        } else this.downloadsCache.set(record.trackId, record);
       }
       this.notify();
+      void this.processQueue();
     } catch (err) {
       console.error('Failed to initialize downloads cache:', err);
     }
@@ -61,9 +71,8 @@ export class OfflineManager {
   }
 
   private notify(): void {
-    for (const listener of this.listeners) {
-      listener();
-    }
+    if (this.notificationTimer) return;
+    this.notificationTimer = setTimeout(() => { this.notificationTimer = null; for (const listener of this.listeners) listener(); }, 100);
   }
 
   public getDownloadState(trackId: string): DownloadState | undefined {
@@ -170,6 +179,7 @@ export class OfflineManager {
     this.downloadsCache.set(track.id, initialDownloadState);
     await dbService.saveDownloadState(initialDownloadState);
     await dbService.saveTracks([track]); // cache track metadata locally
+    if (this.downloadsCache.get(track.id) !== initialDownloadState) return;
     this.notify();
 
     this.processQueue();
@@ -179,10 +189,7 @@ export class OfflineManager {
    * Process queued downloads
    */
   private async processQueue(): Promise<void> {
-    if (this.isProcessingQueue) return;
-    this.isProcessingQueue = true;
-
-    while (this.downloadQueue.length > 0) {
+    while (this.downloadQueue.length > 0 && this.runningDownloads < this.maxConcurrentDownloads) {
       const track = this.downloadQueue.shift();
       if (!track) break;
 
@@ -192,10 +199,9 @@ export class OfflineManager {
         continue;
       }
 
-      await this.executeTrackDownload(track);
+      this.runningDownloads++;
+      void this.executeTrackDownload(track).catch(error => console.error('Download worker failed:', error)).finally(() => { this.runningDownloads--; void this.processQueue(); });
     }
-
-    this.isProcessingQueue = false;
   }
 
   private async executeTrackDownload(track: Track): Promise<void> {
@@ -218,6 +224,8 @@ export class OfflineManager {
 
     try {
       await updateState({ status: 'downloading', progress: 0, phase: 'preparing', recordedSeconds: 0, sourceDuration: 0 });
+      // Cover failures never discard a successfully downloaded song.
+      const artworkTask = track.artworkUrl ? cacheArtwork(track).catch(() => null) : Promise.resolve(null);
 
       const audioRes = await fetchTrackAudio(track, controller.signal, async progress => {
         if (!controller.signal.aborted) await updateState(progress);
@@ -235,6 +243,7 @@ export class OfflineManager {
         await validateAudioBlob(blob, track, controller.signal, audioRes);
         controller.signal.throwIfAborted();
         await this.audioStorage.save(track.id, blob, blob.type || 'audio/mpeg');
+        await artworkTask;
         await updateState({
           status: 'completed',
           progress: 100,
@@ -248,6 +257,7 @@ export class OfflineManager {
       const reader = audioRes.body.getReader();
       let receivedBytes = 0;
       const chunks: Uint8Array[] = [];
+      let lastTransferUpdate = 0;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -258,6 +268,8 @@ export class OfflineManager {
 
         const baseline = this.downloadsCache.get(track.id)?.progress || 0;
         const progress = totalBytes > 0 ? Math.max(baseline, Math.min(98, Math.round((receivedBytes / totalBytes) * 98))) : baseline;
+        if (Date.now() - lastTransferUpdate < 250) continue;
+        lastTransferUpdate = Date.now();
         await updateState({
           progress,
           bytesDownloaded: receivedBytes,
@@ -276,6 +288,7 @@ export class OfflineManager {
 
       // Store only after checking the actual downloaded audio.
       await this.audioStorage.save(track.id, combinedBlob, mimeType);
+      await artworkTask;
 
       // Step 4: Finalize metadata
       await updateState({
@@ -317,13 +330,21 @@ export class OfflineManager {
    * Download all tracks in a playlist
    */
   public async downloadPlaylist(playlist: Playlist, tracks: Track[]): Promise<void> {
+    const batch = { cancelled: false }; this.playlistBatches.set(playlist.id, batch);
     const trackMap = new Map(tracks.map((t) => [t.id, t]));
     for (const trackId of playlist.trackIds) {
+      if (batch.cancelled) break;
       const track = trackMap.get(trackId);
       if (track) {
         await this.downloadTrack(track);
       }
     }
+    if (this.playlistBatches.get(playlist.id) === batch) this.playlistBatches.delete(playlist.id);
+  }
+
+  public cancelPlaylistDownloads(playlist: Playlist): void {
+    const batch = this.playlistBatches.get(playlist.id); if (batch) batch.cancelled = true;
+    for (const id of playlist.trackIds) if (this.isTrackDownloading(id)) this.cancelDownload(id);
   }
 
   /**

@@ -74,7 +74,7 @@ export const ArtistDetailView: React.FC<ArtistDetailViewProps> = ({ artistId }) 
             {artist.name}
           </h1>
           <p className="text-xs text-zinc-400">
-            {artistTracks.length} tracks • {artistAlbums.length} albums in your vault
+            {artistTracks.length} tracks • {artistAlbums.length} albums in your library
           </p>
 
           <div className="pt-2">

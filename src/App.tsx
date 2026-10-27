@@ -1,4 +1,6 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
+import { MotionConfig, motion } from 'motion/react';
+import { useAppViewport } from './hooks/useAppViewport.js';
 import { AppProvider, useApp } from './context/AppContext.js';
 import { Sidebar } from './components/navigation/Sidebar.js';
 import { MobileNavBar } from './components/navigation/MobileNavBar.js';
@@ -11,11 +13,10 @@ import { AlbumDetailView } from './views/AlbumDetailView.js';
 import { ArtistDetailView } from './views/ArtistDetailView.js';
 import { PlaylistDetailView } from './views/PlaylistDetailView.js';
 import { LikedSongsView } from './views/LikedSongsView.js';
-import { DownloadsView } from './views/DownloadsView.js';
 import { SettingsView } from './views/SettingsView.js';
 import { usePlayer } from './hooks/usePlayer.js';
 import { CreatePlaylistModal } from './components/playlist/CreatePlaylistModal.js';
-import { GoogleDriveConnectCard } from './components/auth/GoogleDriveConnectCard.js';
+import { useSwipeGesture } from './hooks/useSwipeGesture.js';
 import { Plus } from 'lucide-react';
 
 const MainAppContent: React.FC = () => {
@@ -25,8 +26,28 @@ const MainAppContent: React.FC = () => {
     createPlaylistInitialTrackId,
     closeCreatePlaylist,
     openCreatePlaylist,
+    navigate,
   } = useApp();
   const { currentTrack } = usePlayer();
+  useAppViewport();
+  const scrollRef = useRef<HTMLElement>(null);
+  const libraryUnderlay = useRef<HTMLDivElement>(null);
+  const swipeFrame = useRef<number | null>(null);
+  const backStart = useRef<{ x: number; y: number; id: number } | null>(null);
+  const backTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const swipeLanding = useRef(false);
+  const backCommitting = useRef(false);
+  const finishBack = () => { if (!backCommitting.current) return; backCommitting.current = false; if (backTimer.current) clearTimeout(backTimer.current); swipeLanding.current = true; navigate({ type: 'library' }); };
+  useEffect(() => { backCommitting.current = false; backStart.current = null; if (backTimer.current) clearTimeout(backTimer.current); if (swipeFrame.current !== null) cancelAnimationFrame(swipeFrame.current); if (scrollRef.current) { scrollRef.current.style.transform = ''; scrollRef.current.style.transition = ''; scrollRef.current.style.willChange = ''; } if (libraryUnderlay.current) libraryUnderlay.current.style.visibility = 'hidden'; if (route.type !== 'library') swipeLanding.current = false; if (scrollRef.current && route.type === 'library' && swipeLanding.current) scrollRef.current.scrollTop = 0; }, [route]);
+  useEffect(() => () => { if (backTimer.current) clearTimeout(backTimer.current); if (swipeFrame.current !== null) cancelAnimationFrame(swipeFrame.current); }, []);
+  const routeKey = route.type + ('id' in route ? `:${route.id}` : '');
+  const pages = ['home', 'search', 'library'] as const;
+  const pageIndex = pages.indexOf(route.type as any);
+  const gestures = useSwipeGesture({
+    exclude: '[data-song-swipe], button, a, .segmented-tabs, [data-sonora-overlay]',
+    onLeft: () => { if (pageIndex >= 0 && pageIndex < 2) navigate({ type: pages[pageIndex + 1] }); },
+    onRight: () => { if (pageIndex > 0) navigate({ type: pages[pageIndex - 1] }); else if (route.type === 'settings') navigate({ type: 'home' }); },
+  });
   const renderCurrentView = () => {
     switch (route.type) {
       case 'home':
@@ -46,7 +67,7 @@ const MainAppContent: React.FC = () => {
       case 'liked':
         return <LikedSongsView />;
       case 'downloads':
-        return <DownloadsView />;
+        return <SettingsView initialTab="downloads" />;
       case 'settings':
         return <SettingsView />;
       default:
@@ -55,7 +76,7 @@ const MainAppContent: React.FC = () => {
   };
 
   return (
-    <div className="app-shell flex flex-col w-screen overflow-hidden bg-[#050505] text-white antialiased font-sans relative selection:bg-blue-600 selection:text-white">
+    <div className="app-shell flex flex-col w-screen overflow-hidden bg-[#050505] text-white antialiased font-sans relative selection:bg-blue-600 selection:text-white" onPointerDownCapture={event => { if (event.pointerType === 'touch' && (event.target as HTMLElement).closest('button:not(:disabled)')) { try { navigator.vibrate?.(8); } catch { /* Haptics are optional. */ } } }}>
       {/* Atmospheric Ambient Glow Layer */}
       <div
         className="absolute inset-0 pointer-events-none z-0"
@@ -69,12 +90,12 @@ const MainAppContent: React.FC = () => {
       <OfflineIndicator />
 
       {/* Main App Layout */}
-      <div className="flex flex-1 overflow-hidden relative z-10">
+      <div className="flex flex-1 min-h-0 overflow-hidden relative z-10">
         {/* Desktop Left Sidebar */}
         <Sidebar />
 
         {/* Main Content Column */}
-        <div className="flex-1 flex flex-col overflow-hidden relative">
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden relative">
           {/* Top Atmospheric Header */}
           <header className="h-16 shrink-0 hidden md:flex items-center justify-between px-8 bg-black/20 backdrop-blur-md border-b border-white/5 z-20 select-none">
             <div className="flex items-center gap-4">
@@ -86,8 +107,6 @@ const MainAppContent: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-3">
-              {/* Google Drive Status Bar */}
-              <GoogleDriveConnectCard compact />
 
               {/* Quick Create Playlist Button */}
               <button
@@ -111,31 +130,36 @@ const MainAppContent: React.FC = () => {
           </header>
 
           {/* Dynamic Center Scroll View */}
+          {route.type === 'playlist' && <div ref={libraryUnderlay} aria-hidden="true" className="main-scroll absolute inset-0 overflow-hidden bg-[#050505] px-4 sm:px-8 pointer-events-none" style={{ visibility: 'hidden' }}><div className="max-w-7xl mx-auto w-full"><LibraryView /></div></div>}
           <main
             id="main-content-scroll"
-            className={`main-scroll flex-1 overflow-y-auto px-4 sm:px-8 transition-all ${
-              currentTrack ? 'pb-with-player md:pb-28' : 'pb-with-nav md:pb-8'
-            }`}
+            {...gestures}
+            ref={scrollRef}
+            className={`main-scroll relative min-h-0 flex-1 overflow-y-auto px-4 sm:px-8 bg-[#050505] ${route.type === 'playlist' ? 'playlist-page-enter' : ''}`}
+            onTransitionEnd={event => { if (event.target === event.currentTarget && event.propertyName === 'transform') finishBack(); }}
           >
-            <div className="max-w-7xl mx-auto w-full">{renderCurrentView()}</div>
+              <motion.div key={routeKey} className="route-content max-w-7xl mx-auto w-full"
+                initial={(swipeLanding.current && route.type === 'library') || route.type === 'playlist' ? false : { opacity: 0, y: 10 }} animate={{ opacity: 1, x: 0, y: 0 }}
+                transition={{ duration: route.type === 'playlist' ? 0.3 : 0.18, ease: [0.22, 1, 0.36, 1] }}>
+                {renderCurrentView()}
+              </motion.div>
           </main>
+          {route.type === 'playlist' && <div data-native-swipe aria-hidden="true" className="absolute left-0 top-0 bottom-0 w-8 z-30" style={{ touchAction: 'pan-y' }} onPointerDown={e => { if (!e.isPrimary || backCommitting.current) return; if (backTimer.current) clearTimeout(backTimer.current); backStart.current = { x: e.clientX, y: e.clientY, id: e.pointerId }; if (scrollRef.current) { scrollRef.current.style.transition = 'none'; scrollRef.current.style.willChange = 'transform'; } e.currentTarget.setPointerCapture(e.pointerId); }} onPointerMove={e => { const start = backStart.current; if (!start || start.id !== e.pointerId) return; const dx = e.clientX - start.x; if (dx > 5 && dx > Math.abs(e.clientY - start.y) * 1.2) { if (libraryUnderlay.current) libraryUnderlay.current.style.visibility = 'visible'; if (swipeFrame.current !== null) cancelAnimationFrame(swipeFrame.current); swipeFrame.current = requestAnimationFrame(() => { if (scrollRef.current) scrollRef.current.style.transform = `translate3d(${Math.min(innerWidth, dx)}px,0,0)`; swipeFrame.current = null; }); } }} onPointerUp={e => { const start = backStart.current; backStart.current = null; if (swipeFrame.current !== null) { cancelAnimationFrame(swipeFrame.current); swipeFrame.current = null; } const finish = !!start && e.clientX - start.x > 70 && e.clientX - start.x > Math.abs(e.clientY - start.y) * 1.2; if (finish) backCommitting.current = true; if (scrollRef.current) { scrollRef.current.style.transition = 'transform 220ms cubic-bezier(.22,1,.36,1)'; scrollRef.current.style.transform = finish ? `translate3d(${innerWidth}px,0,0)` : 'translate3d(0,0,0)'; } if (finish) backTimer.current = setTimeout(finishBack, 350); else backTimer.current = setTimeout(() => { if (libraryUnderlay.current) libraryUnderlay.current.style.visibility = 'hidden'; }, 220); }} onPointerCancel={() => { backStart.current = null; if (swipeFrame.current !== null) { cancelAnimationFrame(swipeFrame.current); swipeFrame.current = null; } if (scrollRef.current) { scrollRef.current.style.transition = 'transform 220ms ease-out'; scrollRef.current.style.transform = 'translate3d(0,0,0)'; } backTimer.current = setTimeout(() => { if (libraryUnderlay.current) libraryUnderlay.current.style.visibility = 'hidden'; }, 220); }} />}
         </div>
       </div>
 
       {/* Persistent Bottom Audio Player */}
-      <BottomPlayer />
-
-      {/* Mobile Bottom Navigation Bar */}
-      <MobileNavBar />
+      <div className="app-dock shrink-0 relative z-40">
+        <BottomPlayer />
+        <MobileNavBar />
+      </div>
 
       {/* Create Playlist Modal */}
-      {isCreatePlaylistOpen && (
         <CreatePlaylistModal
           isOpen={isCreatePlaylistOpen}
           initialTrackId={createPlaylistInitialTrackId}
           onClose={closeCreatePlaylist}
         />
-      )}
 
     </div>
   );
@@ -143,8 +167,8 @@ const MainAppContent: React.FC = () => {
 
 export default function App() {
   return (
-    <AppProvider>
+    <MotionConfig reducedMotion="user"><AppProvider>
       <MainAppContent />
-    </AppProvider>
+    </AppProvider></MotionConfig>
   );
 }

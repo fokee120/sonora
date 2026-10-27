@@ -106,7 +106,8 @@ export async function cachedSearchYoutubeMusic(
   if (cached && cached.expiresAt > Date.now()) return cached.tracks;
 
   const existing = inFlightSearches.get(key);
-  if (existing) return existing;
+  // A cancellable caller must not inherit another caller's aborted request.
+  if (existing && !signal) return existing;
 
   const request = searchYoutubeMusic(query, filter, signal)
     .then((tracks) => {
@@ -122,7 +123,7 @@ export async function cachedSearchYoutubeMusic(
       if (inFlightSearches.get(key) === request) inFlightSearches.delete(key);
     });
 
-  inFlightSearches.set(key, request);
+  if (!signal) inFlightSearches.set(key, request);
   return request;
 }
 

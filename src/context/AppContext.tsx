@@ -1,3 +1,5 @@
+import {resumeImports,autoSyncImports} from '../lib/importJobs.js';
+import { audioCache } from '../lib/offline/AudioCache.js';
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Track,
@@ -11,14 +13,6 @@ import { migrateLegacyCatalog } from '../lib/legacyCatalogMigration.js';
 import { dbService } from '../lib/db.js';
 import { offlineManager } from '../lib/offline/OfflineManager.js';
 import { useNetworkState } from '../hooks/useNetworkState.js';
-import { User } from 'firebase/auth';
-import { readDriveDuration } from '../lib/audio/driveMetadata.js';
-import { responseError } from '../lib/audio/audioSource.js';
-import {
-  initGoogleAuth,
-  getDriveAccessToken,
-  logoutGoogleDrive,
-} from '../lib/googleAuth.js';
 import {
   cachedSearchYoutubeMusic as searchYoutubeMusicApi,
   isYoutubeTrack,
@@ -41,17 +35,11 @@ interface AppContextType {
   playlists: Playlist[];
   favorites: Set<string>;
   history: { trackId: string; playedAt: number }[];
+  recentHistory: { trackId: string; playedAt: number }[];
   isLoadingLibrary: boolean;
   libraryError: string | null;
   refreshLibrary: () => Promise<void>;
   addTracksToLibrary: (tracks: Track[]) => Promise<void>;
-
-  // Google Drive
-  driveUser: User | null;
-  isDriveConnected: boolean;
-  isScanningDrive: boolean;
-  scanGoogleDrive: (folderId?: string) => Promise<void>;
-  setDriveUser: (user: User | null) => void;
 
   // YouTube Music
   ytResults: Track[];
@@ -95,6 +83,7 @@ interface AppContextType {
     description?: string,
     initialTrackIds?: string[]
   ) => Promise<Playlist>;
+  updatePlaylist: (id: string, patch: Partial<Playlist>) => Promise<void>;
   deletePlaylist: (id: string) => Promise<void>;
   addTrackToPlaylist: (playlistId: string, trackId: string) => Promise<void>;
   removeTrackFromPlaylist: (playlistId: string, trackId: string) => Promise<void>;
@@ -109,7 +98,10 @@ const AppContext = createContext<AppContextType | null>(null);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isOnline, recheck: recheckConnection } = useNetworkState();
-  const [route, setRoute] = useState<ViewRoute>({ type: 'home' });
+  const [route, setRoute] = useState<ViewRoute>(() => ({ type: new URLSearchParams(location.search).has('spotify') ? 'settings' : 'home' }));
+  useEffect(() => {
+    try { localStorage.removeItem('gdrive_access_token'); localStorage.removeItem('gdrive_user'); } catch {}
+  }, []);
 
   const [tracks, setTracks] = useState<Track[]>([]);
   const [albums, setAlbums] = useState<Album[]>([]);
@@ -117,18 +109,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [history, setHistory] = useState<{ trackId: string; playedAt: number }[]>([]);
+  const [recentHistory, setRecentHistory] = useState<{ trackId: string; playedAt: number }[]>([]);
 
   const [isLoadingLibrary, setIsLoadingLibrary] = useState<boolean>(true);
   const [libraryError, setLibraryError] = useState<string | null>(null);
 
   const [storageInfo, setStorageInfo] = useState<StorageQuotaInfo | null>(null);
   const [downloadCounter, setDownloadCounter] = useState<number>(0); // To trigger reactivity on downloads
-
-  // Google Drive Integration State
-  const [driveUser, setDriveUser] = useState<User | null>(null);
-  const [isDriveConnected, setIsDriveConnected] = useState<boolean>(false);
-  const [isScanningDrive, setIsScanningDrive] = useState<boolean>(false);
-  const driveScanController = useRef<AbortController | null>(null);
 
   // YouTube Music search state
   const [ytResults, setYtResults] = useState<Track[]>([]);
@@ -163,7 +150,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => window.removeEventListener('track-duration', onDuration);
   }, [saveDuration]);
 
-  useEffect(() => () => driveScanController.current?.abort(), []);
 
   // Playlist Modal Controls
   const [isCreatePlaylistOpen, setIsCreatePlaylistOpen] = useState<boolean>(false);
@@ -181,9 +167,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Subscribe to offline manager updates
   useEffect(() => {
+    let completed = '';
     const unsub = offlineManager.subscribe(() => {
       setDownloadCounter((prev) => prev + 1);
-      refreshStorageInfo();
+      const next = [...offlineManager.getAllDownloadedTrackIds()].sort().join('\u0000');
+      if (next !== completed) { completed = next; void refreshStorageInfo(); }
     });
     return unsub;
   }, []);
@@ -224,110 +212,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   }, []);
 
-  // Scan Google Drive audio files and extract metadata (using server-side or client token)
-  const scanGoogleDrive = useCallback(async (folderId?: string) => {
-    const token = getDriveAccessToken();
-    driveScanController.current?.abort();
-    const controller = new AbortController();
-    driveScanController.current = controller;
-
-    setIsScanningDrive(true);
-    setLibraryError(null);
-
-    try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (token && token !== 'server-active-token') {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-
-      const res = await fetch('/api/drive/scan', {
-        method: 'POST',
-        signal: controller.signal,
-        headers,
-        body: JSON.stringify({
-          accessToken: token && token !== 'server-active-token' ? token : undefined,
-          folderId,
-        }),
-      });
-
-      if (!res.ok) {
-        if (res.status === 401) {
-          setIsDriveConnected(false);
-          setDriveUser(null);
-        }
-        throw await responseError(res, 'Failed to scan Google Drive');
-      }
-
-      const data = await res.json();
-      const scannedTracks: Track[] = data.tracks || [];
-      for (const track of scannedTracks) {
-        const cached = await dbService.getSetting<{ key?: string; duration: number } | null>(`duration:${track.id}`, null);
-        if (cached && cached.key === track.metadataKey) track.duration = cached.duration;
-      }
-      controller.signal.throwIfAborted();
-      const byId = new Map(scannedTracks.map(track => [track.id, track]));
-      data.albums = (data.albums || []).map((album: Album) => {
-        const albumTracks = (album.tracks || []).map(track => byId.get(track.id) || track);
-        return { ...album, tracks: albumTracks, duration: albumTracks.reduce((sum, track) => sum + track.duration, 0) };
-      });
-      setTracks(data.tracks || []);
-      setAlbums(data.albums || []);
-      setArtists(data.artists || []);
-
-      if (data.tracks && data.tracks.length > 0) {
-        // Persist to IndexedDB
-        await dbService.saveTracks(data.tracks);
-        await dbService.saveAlbums(data.albums || []);
-        await dbService.saveArtists(data.artists || []);
-        // Limit parallel range reads so indexing stays responsive during playback.
-        const pending = scannedTracks.filter(track => !track.duration);
-        const worker = async () => {
-          while (pending.length && !controller.signal.aborted) {
-            const track = pending.shift()!;
-            try {
-              const duration = await readDriveDuration(track, controller.signal);
-              if (!controller.signal.aborted) await saveDuration(track, duration);
-            } catch (err) {
-              if (!controller.signal.aborted) console.warn('Could not read audio duration:', track.id, err);
-            }
-          }
-        };
-        void Promise.all([worker(), worker()]);
-      } else if (data.debug) {
-        const sampleNames = (data.debug.sampleFiles || [])
-          .map((file: { name: string }) => file.name)
-          .filter(Boolean)
-          .slice(0, 3)
-          .join(', ');
-        setLibraryError(
-          `Google Drive scan found ${data.debug.visibleFiles} visible files and ${data.debug.audioFiles} audio files. ${sampleNames ? `Sample files: ${sampleNames}` : 'Try disconnecting and signing in again with Drive permission.'}`
-        );
-      }
-    } catch (err: any) {
-      if (controller.signal.aborted) return;
-      console.error('Failed scanning Google Drive:', err);
-      setLibraryError(err.message || 'Failed scanning Google Drive');
-    } finally {
-      if (driveScanController.current === controller) setIsScanningDrive(false);
-    }
-  }, [saveDuration]);
-
-  // Google Drive Auth listener & Server-side session verification
-  useEffect(() => {
-    let initialScanTriggered = false;
-    const unsub = initGoogleAuth((user, token) => {
-      setDriveUser(user);
-      setIsDriveConnected(Boolean(user && token));
-      if (user && token && !initialScanTriggered) {
-        initialScanTriggered = true;
-        scanGoogleDrive();
-      }
-    });
-    return unsub;
-  }, [scanGoogleDrive]);
-
   // Merge YouTube Music tracks saved via offline downloads (IndexedDB)
   // into the active library so they show up in Library/Downloads/Search.
   const mergeSavedYoutubeTracks = useCallback(async () => {
@@ -354,8 +238,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const favs = await dbService.getFavorites();
       setFavorites(new Set(favs));
 
-      const hist = await dbService.getRecentHistory(30);
+      const hist = await dbService.getPlayHistory(300);
       setHistory(hist.map((h) => ({ trackId: h.trackId, playedAt: h.playedAt })));
+      setRecentHistory(await dbService.getRecentHistory(30));
     } catch (err) {
       console.warn('Error loading user data:', err);
     }
@@ -367,10 +252,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     refreshStorageInfo();
   }, [refreshLibrary, loadUserData, refreshStorageInfo]);
 
+  useEffect(() => {
+    const update = () => { void Promise.all([dbService.getPlayHistory(300), dbService.getRecentHistory(30)])
+      .then(([plays, recent]) => { setHistory(plays); setRecentHistory(recent); }); };
+    window.addEventListener('sonora:history-changed', update);
+    return () => window.removeEventListener('sonora:history-changed', update);
+  }, []);
+
   // React to download completions: newly saved YT tracks join the library
   useEffect(() => {
+    let completed = '';
     const unsub = offlineManager.subscribe(() => {
-      void mergeSavedYoutubeTracks();
+      const next = [...offlineManager.getAllDownloadedTrackIds()].sort().join('\u0000');
+      if (next !== completed) { completed = next; void mergeSavedYoutubeTracks(); }
     });
     return unsub;
   }, [mergeSavedYoutubeTracks]);
@@ -413,13 +307,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
+  const clearYtResults = useCallback(() => {
+    ++ytSearchSequence.current;
+    ytErrorRef.current = null;
+    setYtResults([]);
+    setIsSearchingYt(false);
+  }, []);
+
   const ytSearchError = ytErrorRef.current;
 
   // Offline filtering: when offline, show ONLY what is downloaded locally
   const downloadedTrackIds = useMemo(() => offlineManager.getAllDownloadedTrackIds(), [downloadCounter]);
 
   const displayTracks = useMemo(
-    () => isOnline ? tracks : tracks.filter((t) => downloadedTrackIds.has(t.id)),
+    () => isOnline ? tracks : tracks.filter((t) => (downloadedTrackIds.has(t.id) || audioCache.has(t.id))),
     [downloadedTrackIds, isOnline, tracks]
   );
 
@@ -461,7 +362,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const displayPlaylists = useMemo(
     () => isOnline
       ? playlists
-      : playlists.filter((pl) => pl.trackIds.some((id) => downloadedTrackIds.has(id))),
+      : playlists.filter((pl) => pl.trackIds.some((id) => downloadedTrackIds.has(id) || audioCache.has(id))),
     [downloadedTrackIds, isOnline, playlists]
   );
 
@@ -514,6 +415,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return success;
   }, [refreshStorageInfo]);
 
+  useEffect(() => { if (isOnline) audioCache.enqueue(tracks); }, [tracks, isOnline]);
+
+  useEffect(()=>{const refresh=()=>{void dbService.getAllPlaylists().then(setPlaylists);void dbService.getAllTracks().then(setTracks);};window.addEventListener('sonora:imports-changed',refresh);let cacheTimer: ReturnType<typeof setTimeout> | undefined;const cacheChanged=()=>{if(cacheTimer) return;cacheTimer=setTimeout(()=>{cacheTimer=undefined;setDownloadCounter(n=>n+1);void dbService.getAllTracks().then(setTracks);},500);};window.addEventListener('sonora:cache-changed',cacheChanged);void resumeImports();const timer=setInterval(()=>{if(navigator.onLine){void resumeImports();void autoSyncImports();}},60000);return()=>{window.removeEventListener('sonora:imports-changed',refresh);window.removeEventListener('sonora:cache-changed',cacheChanged);if(cacheTimer)clearTimeout(cacheTimer);clearInterval(timer);};},[]);
   // Playlist management
   const createPlaylist = useCallback(
     async (
@@ -536,6 +440,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     []
   );
 
+  const updatePlaylist = useCallback(async (id: string, patch: Partial<Playlist>) => {
+    const updated=await dbService.mutatePlaylist(id, latest=>({...latest,...patch,id,updatedAt:Date.now()}));
+    if(updated)setPlaylists(previous=>previous.map(p=>p.id===id?updated:p));
+  }, []);
+
   const deletePlaylist = useCallback(async (id: string) => {
     await dbService.deletePlaylist(id);
     setPlaylists((prev) => prev.filter((p) => p.id !== id));
@@ -543,33 +452,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addTrackToPlaylist = useCallback(
     async (playlistId: string, trackId: string) => {
-      const pl = playlists.find((p) => p.id === playlistId);
-      if (!pl) return;
-      if (pl.trackIds.includes(trackId)) return;
-
-      const updated: Playlist = {
-        ...pl,
-        trackIds: [...pl.trackIds, trackId],
-        updatedAt: Date.now(),
-      };
-      await dbService.savePlaylist(updated);
-      setPlaylists((prev) => prev.map((p) => (p.id === playlistId ? updated : p)));
+      const updated=await dbService.mutatePlaylist(playlistId, pl=>({...pl,trackIds:[...new Set([...pl.trackIds,trackId])],updatedAt:Date.now()}));
+      if(updated)setPlaylists(previous=>previous.map(p=>p.id===playlistId?updated:p));
     },
     [playlists]
   );
 
   const removeTrackFromPlaylist = useCallback(
     async (playlistId: string, trackId: string) => {
-      const pl = playlists.find((p) => p.id === playlistId);
-      if (!pl) return;
-
-      const updated: Playlist = {
-        ...pl,
-        trackIds: pl.trackIds.filter((id) => id !== trackId),
-        updatedAt: Date.now(),
-      };
-      await dbService.savePlaylist(updated);
-      setPlaylists((prev) => prev.map((p) => (p.id === playlistId ? updated : p)));
+      const updated=await dbService.mutatePlaylist(playlistId, pl=>({...pl,trackIds:pl.trackIds.filter(id=>id!==trackId),updatedAt:Date.now()}));
+      if(updated)setPlaylists(previous=>previous.map(p=>p.id===playlistId?updated:p));
     },
     [playlists]
   );
@@ -615,24 +507,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         playlists,
         favorites,
         history,
+        recentHistory,
         isLoadingLibrary,
         libraryError,
         refreshLibrary,
         addTracksToLibrary,
-        driveUser,
-        isDriveConnected,
-        isScanningDrive,
-        scanGoogleDrive,
-        setDriveUser,
         ytResults,
         ytFilter,
         isSearchingYt,
         ytSearchError,
         searchYoutubeMusic,
-        clearYtResults: () => {
-          ytErrorRef.current = null;
-          setYtResults([]);
-        },
+        clearYtResults,
         isCreatePlaylistOpen,
         createPlaylistInitialTrackId,
         openCreatePlaylist,
@@ -654,6 +539,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshStorageInfo,
         requestPersistStorage,
         createPlaylist,
+        updatePlaylist,
         deletePlaylist,
         addTrackToPlaylist,
         removeTrackFromPlaylist,

@@ -24,7 +24,7 @@ export class DirectDownloader {
     }
     const controller = new AbortController();
     const combined = AbortSignal.any([signal, controller.signal]);
-    const timeout = setTimeout(() => controller.abort(new Error('Fast download exceeded 90 second timeout')), 90_000);
+    const timeout = setTimeout(() => controller.abort(new Error('Download exceeded the 10 minute timeout')), 600_000);
     const root = resolve('.sonora/downloads');
     await mkdir(root, { recursive: true });
     const directory = await mkdtemp(join(root, 'direct-'));

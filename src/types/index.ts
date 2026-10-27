@@ -44,6 +44,9 @@ export interface Artist {
 }
 
 export interface Playlist {
+  pinnedAt?: number;
+  lastPlayedAt?: number;
+  source?: { type: 'ytmusic' | 'youtube' | 'spotify' | 'file'; id: string; syncedAt?: number };
   id: string;
   title: string;
   description?: string;
@@ -59,7 +62,7 @@ export interface DownloadState {
   trackId: string;
   status: DownloadStatus;
   progress: number; // 0 - 100
-  phase?: 'preparing' | 'recording' | 'fetching' | 'finalizing' | 'transferring' | 'validating';
+  phase?: 'preparing' | 'recording' | 'fetching' | 'finalizing' | 'waiting_transfer' | 'transferring' | 'validating';
   sourceBytesDownloaded?: number;
   sourceTotalBytes?: number;
   recordedSeconds?: number;
@@ -80,7 +83,9 @@ export interface AudioBlobRecord {
 
 export interface ArtworkRecord {
   id: string; // url or trackId
-  blob: Blob;
+  blob?: Blob;
+  bytes?: ArrayBuffer;
+  sourceUrl?: string;
   mimeType: string;
   cachedAt: number;
 }
