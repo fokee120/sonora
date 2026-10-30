@@ -1,3 +1,4 @@
+import {isServerOnline} from '../serverConnection.js';
 import type { Track } from '../../types/index.js';
 import { isYoutubeTrack, youtubeVideoId } from '../ytmusic/youtubeMusic.js';
 import { createUuid } from '../uuid.js';
@@ -31,7 +32,7 @@ let prepareAgainAt = 0;
 /** Optional, silent warmup. Never request a song or wait for this before play. */
 export function prepareYoutubeBridge(): Promise<void> {
   if (prepareRequest) return prepareRequest;
-  if (!navigator.onLine || Date.now() < prepareAgainAt) return Promise.resolve();
+  if (!isServerOnline() || Date.now() < prepareAgainAt) return Promise.resolve();
   // Cool down failures too, including deployments without this optional API.
   prepareAgainAt = Date.now() + 30_000;
   const controller = new AbortController();

@@ -13,7 +13,7 @@ import type {Track} from '../../types/index.js';
 export const songIdentity=(track:Track)=>[track.artist,track.title].map(value=>value.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim()).join('|');
 
 export const RecommendationsSection:React.FC=()=>{
- const {tracks,favorites,history,playlists,isOnline,navigate}=useApp();
+ const {tracks,favorites,history,playlists,isOnline,isDownloaded,navigate}=useApp();
  const {playTrack}=usePlayer();
  const [catalog,setCatalog]=useState<Track[]>([]),[loading,setLoading]=useState(false),[error,setError]=useState(false),[radio,setRadio]=useState(false),[refresh,setRefresh]=useState(0);
  const [prefs,setPrefs]=useState<AccountPreferences>(defaultPreferences());
@@ -65,7 +65,7 @@ export const RecommendationsSection:React.FC=()=>{
  },[catalog,tracks,profile,history,favorites,saved,refresh]);
  useEffect(()=>{audioCache.enqueue(mixed,1);},[mixed]);
  return <section className="section-stack home-discovery" aria-label="Music recommendations">
-  <div className="section-heading"><div><p className="eyebrow">YOUR NEXT FAVORITES</p><h2>Recommended for you</h2></div><div className="discovery-actions"><button className="player-icon" aria-label="Refresh recommendations" title="Refresh recommendations" disabled={loading||!isOnline} onClick={()=>setRefresh(n=>n+1)}><RefreshCw size={18} className={loading?'animate-spin':''}/></button>{mixed.length>0&&<button className="text-button" onClick={()=>playTrack(mixed[0],mixed)}><Play size={14} fill="currentColor"/>Play all</button>}</div></div>
+  <div className="section-heading"><div><p className="eyebrow">YOUR NEXT FAVORITES</p><h2>Recommended for you</h2></div><div className="discovery-actions"><button className="player-icon" aria-label="Refresh recommendations" title="Refresh recommendations" disabled={loading||!isOnline} onClick={()=>setRefresh(n=>n+1)}><RefreshCw size={18} className={loading?'animate-spin':''}/></button>{mixed.length>0&&<button className="text-button" disabled={!mixed.some(t=>isOnline||isDownloaded(t.id))} onClick={()=>{const ready=mixed.filter(t=>isOnline||isDownloaded(t.id));if(ready.length)void playTrack(ready[0],ready);}}><Play size={14} fill="currentColor"/>Play all</button>}</div></div>
   <p className="discovery-caption">{radio?'YouTube Music radio, inspired by your listening.':!isOnline?'Discoveries based on your saved listening.':'A fresh mix of new finds and songs you might love.'}</p>
   {loading&&!mixed.length&&<div role="status" aria-label="Finding your next favorites" className="skeleton-rows"><i/><i/><i/></div>}
   {mixed.length>0&&<div className="song-list">{mixed.map((track,index)=><TrackRow key={track.id} track={track} index={index} tracksContext={mixed}/>)}</div>}

@@ -123,7 +123,7 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
     } catch { notify('Couldn’t add this song. Try again.', true); }
     finally { swipeSaving.current = false; }
   };
-  const songGestures = useSwipeGesture({ lockHorizontal: true, maxDrag: 10000, onDrag: offset => { const row = rowRef.current; if (!row) return; if (swipeFrame.current !== null) cancelAnimationFrame(swipeFrame.current);
+  const songGestures = useSwipeGesture({ lockHorizontal: true, maxDrag: 10000, disabled: !isOnline, onDrag: offset => { const row = rowRef.current; if (!row) return; if (swipeFrame.current !== null) cancelAnimationFrame(swipeFrame.current);
     // Theme row fills can be translucent: only expose actions in the strip
     // uncovered by an intentional horizontal drag, never through the row itself.
     const actions=swipeActionsRef.current;
@@ -139,9 +139,10 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
   const downloading = isDownloading(track.id);
   const downloadState = offlineManager.getDownloadState(track.id);
   const favorite = isFavorite(track.id);
+  const unavailable=!isOnline&&!downloaded;
 
   const handlePlayClick = (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('[data-sonora-overlay]')) return;
+    if (unavailable || (e.target as HTMLElement).closest('[data-sonora-overlay]')) return;
     e.stopPropagation();
     playUiSound('tap');
     if (onPlay) { onPlay(); return; }
@@ -177,11 +178,14 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
       ref={rowRef}
       style={{touchAction:'pan-y'}}
       data-current={isCurrent}
+      data-offline-unavailable={unavailable}
+      aria-disabled={unavailable}
+      title={unavailable?'Download this song to play it offline':undefined}
       onTransitionEnd={event => { if (event.target === event.currentTarget && event.propertyName === 'transform') event.currentTarget.style.willChange = ''; }}
       {...songGestures}
       data-song-swipe
-      role="group" tabIndex={0} aria-label={track.title + " by " + track.artist}
-      onKeyDown={e => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); if (onPlay) onPlay(); else if (isCurrent) togglePlay(); else playTrack(track, tracksContext); } }}
+      role="group" tabIndex={unavailable?-1:0} aria-label={track.title + " by " + track.artist}
+      onKeyDown={e => { if (!unavailable && e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); if (onPlay) onPlay(); else if (isCurrent) togglePlay(); else playTrack(track, tracksContext); } }}
       id={`track-row-${track.id}`}
       onClick={handlePlayClick}
       className={`track-row group relative flex items-center gap-3 px-4 py-3 transition cursor-pointer select-none ${
@@ -194,6 +198,7 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
       <div className="w-8 shrink-0 flex items-center justify-center text-xs font-mono text-zinc-500">
         <button
           onClick={handlePlayClick}
+          disabled={unavailable}
           aria-label={(isCurrentlyPlaying ? "Pause " : "Play ") + track.title}
           className="w-7 h-7 rounded-full flex items-center justify-center transition group-hover:bg-blue-600 group-hover:text-white"
         >

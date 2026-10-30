@@ -3,25 +3,25 @@ import { WifiOff, RefreshCw, HardDriveDownload } from 'lucide-react';
 import { useApp } from '../../context/AppContext.js';
 
 export const OfflineIndicator: React.FC = () => {
-  const { isOnline, recheckConnection, displayTracks } = useApp();
+  const { isOnline, recheckConnection, displayTracks, isDownloaded } = useApp();
 
   if (isOnline) return null;
 
   return (
     <div
-      id="offline-indicator-banner"
+      id="offline-indicator-banner" role="status"
       className="bg-black/70 border-b border-amber-500/20 px-4 py-2 text-xs text-amber-200 flex items-center justify-between backdrop-blur-xl sticky top-0 z-30 transition"
     >
       <div className="flex items-center gap-2.5">
         <div className="w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.8)]" />
         <span className="text-[10px] uppercase font-bold tracking-widest text-amber-400">Offline Mode</span>
-        <span className="text-zinc-400 hidden sm:inline text-xs">— Playing from local IndexedDB storage</span>
+        <span className="text-zinc-400 hidden sm:inline text-xs">— Downloaded songs only</span>
       </div>
 
       <div className="flex items-center gap-3">
         <span className="flex items-center gap-1.5 text-zinc-300 text-[11px] font-mono">
           <HardDriveDownload className="w-3.5 h-3.5 text-amber-400" />
-          <span>{displayTracks.length} cached</span>
+          <span>{displayTracks.filter(track=>isDownloaded(track.id)).length} downloaded</span>
         </span>
 
         <button

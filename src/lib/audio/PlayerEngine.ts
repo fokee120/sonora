@@ -1,3 +1,4 @@
+import {isServerOnline,subscribeConnection,checkServerConnection} from '../serverConnection.js';
 import { audioCache } from '../offline/AudioCache.js';
 import { Track, PlayerState, RepeatMode, QueueItem, QueueSource } from '../../types/index.js';
 import { offlineManager } from '../offline/OfflineManager.js';
@@ -76,6 +77,7 @@ export class PlayerEngine {
 
   /** Audition on the same native player, without changing the saved queue or history. */
   public async previewTrack(track: Track): Promise<void> {
+    if(!this.canPlayOffline(track))return;
     this.previewGeneration++;
     this.persistPosition(true);
     const previous = this.previewSession;
@@ -160,6 +162,7 @@ export class PlayerEngine {
   private preparedNext: { id: string; duration: number; url: string; source: 'local' | 'cloud' } | null = null;
   private preparingNext: { id: string; duration: number; controller: AbortController; promise: Promise<void> } | null = null;
 
+  private canPlayOffline(track:Track|undefined){return !!track&&(isServerOnline()||offlineManager.isTrackDownloaded(track.id));}
   private constructor() {
     this.configureNativeAudioSession();
     this.audio = new Audio();
@@ -167,6 +170,10 @@ export class PlayerEngine {
     this.setupAudioListeners();
     this.setupMediaSession();
     this.restorePersistedState();
+    subscribeConnection(()=>{if(isServerOnline()||!this.state.currentTrack||this.canPlayOffline(this.state.currentTrack))return;
+      const active=this.wantsPlayback||this.state.isLoading;this.pause();this.loadController?.abort();this.preparingNext?.controller.abort();this.preparingNext=null;if(this.preparedNext)URL.revokeObjectURL(this.preparedNext.url);this.preparedNext=null;
+      this.currentObjectUrl&&URL.revokeObjectURL(this.currentObjectUrl);this.currentObjectUrl=null;this.audio.removeAttribute('src');this.audio.load();this.state.currentTrack=null;this.state.isLoading=false;this.state.error=null;this.sourceAssigned=false;this.notifyState();if(active)this.next();
+    });
     // User interaction warms only the isolated browser, never a song.
     const warmup = () => { void prepareYoutubeBridge(); };
     document.addEventListener('pointerdown', warmup, { passive: true });
@@ -224,7 +231,7 @@ export class PlayerEngine {
           if (!item?.track?.id || !item.queueId || ids.has(item.queueId) || (!savedCursor && songs.has(item.track.id))) return false;
           ids.add(item.queueId); songs.add(item.track.id); return true;
         }).map((item, index) => ({...item, contextIndex: item.manual ? item.contextIndex : item.contextIndex ?? index}));
-        if (savedTrack) {
+        if (savedTrack && this.canPlayOffline(savedTrack)) {
           this.state.currentTrack = savedTrack;
           this.state.duration = savedTrack.duration || 0;
           if(savedPosition?.trackId===savedTrack.id&&Number.isFinite(savedPosition.position))this.state.currentTime=Math.max(0,Math.min(savedPosition.position,savedTrack.duration||savedPosition.position));
@@ -588,6 +595,7 @@ export class PlayerEngine {
     if (this.preparingNext && !matches(this.preparingNext)) {
       this.preparingNext.controller.abort(); this.preparingNext = null;
     }
+    if (next&&!this.canPlayOffline(next))return;
     if (!next || (this.previousBuffered && matches(this.previousBuffered)) || this.preparedNext || this.preparingNext) return;
     const isDownloaded = offlineManager.isTrackDownloaded(next.id);
     if (!isDownloaded && !audioCache.has(next.id) && (!navigator.onLine || !isYoutubeTrack(next))) return;
@@ -613,6 +621,7 @@ export class PlayerEngine {
    * Load and play a specific track
    */
   public async playTrack(track: Track, newQueue?: Track[]): Promise<void> {
+    if(!this.canPlayOffline(track))return;
     this.state.playlistId = null;
     if (this.previewSession) void this.stopPreview(false);
     await this.loadTrack(track, newQueue);
@@ -620,6 +629,7 @@ export class PlayerEngine {
   }
 
   private async loadTrack(track: Track, newQueue?: Track[], offset = 0, recovery = false): Promise<void> {
+    if(!this.canPlayOffline(track))return;
     this.configureNativeAudioSession();
     const resumeSource=this.resumeBuffer?.id===track.id&&this.resumeBuffer.duration===track.duration?this.resumeBuffer:null;
     if(resumeSource)this.resumeBuffer=null;
@@ -790,7 +800,7 @@ export class PlayerEngine {
       }
 
       // If offline and track not downloaded, reject
-      if (!navigator.onLine) {
+      if (!isServerOnline()) {
         throw new Error('This track is not downloaded for offline playback.');
       }
 
@@ -829,7 +839,8 @@ export class PlayerEngine {
     if (!track || !controller || controller.signal.aborted) return;
     // Only a network failure is recoverable. Decode/unsupported failures must
     // not spin up more browser captures or hide the terminal error.
-    if (audio.error?.code === 2 && navigator.onLine && this.wantsPlayback && this.retryCount === 0 && this.state.playbackSource === 'cloud' && isYoutubeTrack(track)) {
+    if(audio.error?.code===2)void checkServerConnection();
+    if (audio.error?.code === 2 && isServerOnline() && this.wantsPlayback && this.retryCount === 0 && this.state.playbackSource === 'cloud' && isYoutubeTrack(track)) {
       this.retryCount++;
       this.state.isLoading = true;
       this.armLoadingTimeout();
@@ -845,6 +856,7 @@ export class PlayerEngine {
   }
 
   public async play(): Promise<void> {
+    if(this.state.currentTrack&&!this.canPlayOffline(this.state.currentTrack)){this.next();return;}
     this.configureNativeAudioSession();
     this.setupMediaSession();
     this.state.error = null;
@@ -1002,6 +1014,7 @@ export class PlayerEngine {
   /** Select queue context and mode once, then use the existing native playback path. */
   public async playPlaylist(playlistId:string, tracks:Track[], shuffle:boolean, startTrack?:Track,profileId?:string):Promise<void> {
     if(!tracks.length)return;
+    if(!isServerOnline()){tracks=tracks.filter(track=>this.canPlayOffline(track));if(!tracks.length||startTrack&&!this.canPlayOffline(startTrack))return;}
     if(this.previewSession)void this.stopPreview(false);
     const active=startTrack || tracks[shuffle?Math.floor(Math.random()*tracks.length):0];
     this.state.shuffle=shuffle;
@@ -1042,29 +1055,32 @@ export class PlayerEngine {
     if (this.currentQueueIndex + 1 >= this.queue.length) this.extendWithRecommendations();
     let index = this.currentQueueIndex + 1;
     if (index >= this.queue.length) {
-      if (this.state.repeatMode !== 'all') return;
+      if (this.state.repeatMode !== 'all') {if(!isServerOnline())this.pause();return;}
       // A manual request is consumed once; repeat applies to the listening context.
       this.queue = this.queue.filter(item => !item.manual || item.contextIndex !== undefined).map(item => ({...item, manual: false}));
       if (!this.state.shuffle) this.queue.sort((a,b) => (a.contextIndex ?? 0) - (b.contextIndex ?? 0));
       index = 0;
     }
+    if(!isServerOnline()){let checked=0;while(checked<this.queue.length&&!this.canPlayOffline(this.queue[index]?.track)){index++;checked++;if(index>=this.queue.length){if(this.state.repeatMode!=='all')break;index=0;}}}
     const item = this.queue[index];
+    if (!item || !this.canPlayOffline(item.track)){this.pause();return;}
     if (item) void this.playQueueItem(item.queueId);
   }
 
   public previous(skipCurrent = false): void {
     if (this.previewSession) void this.stopPreview(false);
-    if (!skipCurrent && this.state.currentTime > 3) { this.seek(0); return; }
+    if (!skipCurrent && this.state.currentTrack && this.canPlayOffline(this.state.currentTrack) && this.state.currentTime > 3) { this.seek(0); return; }
     if (!this.queue.length) return;
-    const index = this.currentQueueIndex > 0 ? this.currentQueueIndex - 1
+    let index = this.currentQueueIndex > 0 ? this.currentQueueIndex - 1
       : this.state.repeatMode === 'all' ? this.queue.length - 1 : 0;
+    if(!isServerOnline()){let checked=0;while(checked<this.queue.length&&!this.canPlayOffline(this.queue[index].track)){index--;checked++;if(index<0){if(this.state.repeatMode!=='all')return;index=this.queue.length-1;}}if(!this.canPlayOffline(this.queue[index].track))return;}
     void this.playQueueItem(this.queue[index].queueId);
   }
 
   public async playQueueItem(queueId: string): Promise<void> {
     if (this.previewSession) void this.stopPreview(false);
     const index = this.queue.findIndex(item => item.queueId === queueId);
-    if (index < 0) return;
+    if (index < 0 || !this.canPlayOffline(this.queue[index].track)) return;
     this.currentQueueIndex = index;
     if(!this.queue.slice(index+1).some(item=>item.manual))this.manualBase=null;
     const origin=this.queue[index];

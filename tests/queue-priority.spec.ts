@@ -48,13 +48,11 @@ test('queue UI displays only upcoming entries, with manual picks first',async({p
  await page.setViewportSize({width:1200,height:900});await page.locator('#bottom-player-bar').getByTitle('Queue',{exact:true}).click();
  const dialog=page.getByRole('dialog',{name:'Play Queue'});await expect(dialog.getByRole('region',{name:'Your queue'})).toContainText('My second pick');await expect(dialog.getByRole('region',{name:'Up next'})).toContainText('Playlist next');await expect(dialog.locator('.queue-row')).toHaveCount(2);await expect(dialog.locator('.queue-scroll')).not.toContainText('Current song');
 });
-test('loading and errors occupy a stable slot outside the mini player',async({page})=>{
+test('buffering and errors do not restore the removed indicator gap',async({page})=>{
  await page.emulateMedia({reducedMotion:'reduce'});await page.waitForTimeout(300);const before=await page.locator('#bottom-player-bar').boundingBox();
- await page.evaluate(async()=>{const p='/src/lib/audio/PlayerEngine.ts',e=(await import(p)).playerEngine;(window as any).__audios.at(-1).dispatchEvent(new Event('waiting'));});
- await expect(page.getByTestId('dock-notices')).toContainText('Buffering');await expect(page.locator('#bottom-player-bar [role=status],#bottom-player-bar [role=alert]')).toHaveCount(0);
+ await page.evaluate(()=>{(window as any).__audios.at(-1).dispatchEvent(new Event('waiting'));});await expect(page.getByTestId('dock-notices')).toHaveCount(0);
  const after=await page.locator('#bottom-player-bar').boundingBox();expect(Math.abs(after!.height-before!.height)).toBeLessThan(1);expect(Math.abs(after!.y-before!.y)).toBeLessThan(1);
- await page.evaluate(()=>{const audio=(window as any).__audios.at(-1);audio.error={code:3};audio.dispatchEvent(new Event('error'));});await expect(page.getByTestId('dock-notices').getByRole('alert')).toBeVisible();
- const status=await page.getByTestId('dock-notices').boundingBox(),nav=await page.locator('#mobile-bottom-nav').boundingBox();if(nav)expect(status!.y+status!.height).toBeLessThanOrEqual(nav.y+1);
+ await page.evaluate(()=>{const audio=(window as any).__audios.at(-1);audio.error={code:3};audio.dispatchEvent(new Event('error'));});await expect(page.getByTestId('dock-notices')).toHaveCount(0);
 });
 
 test('repeat-all restores promoted context songs in playlist order without repeating standalone manual picks',async({page})=>{

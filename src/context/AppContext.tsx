@@ -319,11 +319,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const ytSearchError = ytErrorRef.current;
 
-  // Offline filtering: when offline, show ONLY what is downloaded locally
+  // Keep songs and playlists visible offline; row availability is enforced separately.
   const downloadedTrackIds = useMemo(() => offlineManager.getAllDownloadedTrackIds(), [downloadCounter]);
 
   const displayTracks = useMemo(
-    () => isOnline ? tracks : tracks.filter((t) => (downloadedTrackIds.has(t.id) || audioCache.has(t.id))),
+    () => tracks,
     [downloadedTrackIds, isOnline, tracks]
   );
 
@@ -363,9 +363,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const displayPlaylists = useMemo(
-    () => isOnline
-      ? playlists
-      : playlists.filter((pl) => pl.trackIds.some((id) => downloadedTrackIds.has(id) || audioCache.has(id))),
+    () => playlists,
     [downloadedTrackIds, isOnline, playlists]
   );
 

@@ -1,3 +1,4 @@
+import {useApp} from '../../context/AppContext.js';
 import React from 'react';
 import { X, Trash2, Play, ListMusic } from 'lucide-react';
 import { usePlayer } from '../../hooks/usePlayer.js';
@@ -7,11 +8,12 @@ import type { QueueItem } from '../../types/index.js';
 
 export const QueueDrawer: React.FC<{isOpen:boolean;onClose:()=>void}> = ({isOpen,onClose}) => {
   const {queue,currentQueueIndex,currentTrack,playQueueItem,removeFromQueue,clearQueue}=usePlayer();
+  const {isOnline,isDownloaded}=useApp();
   const upcoming=queue.slice(currentQueueIndex+1);
   const sections=[{title:'Your queue',items:upcoming.filter(item=>item.manual),manual:true},
     {title:'Up next',items:upcoming.filter(item=>!item.manual),manual:false}];
   const row=(item:QueueItem,index:number)=><div key={item.queueId} className="queue-row" data-manual={!!item.manual}>
-    <button className="queue-song" onClick={()=>void playQueueItem(item.queueId)} aria-label={'Play '+item.track.title}>
+    <button disabled={!isOnline&&!isDownloaded(item.track.id)} className="queue-song" onClick={()=>void playQueueItem(item.queueId)} aria-label={'Play '+item.track.title}>
       <span className="queue-number">{index+1}</span><Artwork track={item.track}/>
       <span className="queue-copy"><strong>{item.track.title}</strong><small>{item.track.artist}</small></span>
       <Play size={15} className="queue-play-icon"/>

@@ -567,3 +567,14 @@
 .song-swipe-underlay[data-direction]{visibility:visible}
 .song-swipe-underlay[data-direction="right"]>.song-swipe-action:last-child,
 .song-swipe-underlay[data-direction="left"]>.song-swipe-action:first-child{visibility:hidden}
+
+.track-row[data-offline-unavailable=true]{opacity:.4;cursor:default}.track-row[data-offline-unavailable=true]:active{background:var(--surface)}.track-row[data-offline-unavailable=true] .song-swipe-underlay{visibility:hidden}
+
+
+.queue-song:disabled,.recap-history-row:disabled{opacity:.4;cursor:default}.primary-button:disabled{opacity:.45;cursor:default}
+
+
+.recap-spotlight-cover:disabled,.recap-ranked-row:disabled:not(:last-child){cursor:default}.recap-spotlight-cover:disabled{opacity:.4}
+
+
+.recap-ranked-row[data-offline-unavailable=true]{opacity:.4}

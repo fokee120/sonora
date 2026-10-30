@@ -92,6 +92,8 @@ Serve the production build over **HTTPS**. Open it in Safari, choose **Share →
 
 Downloaded audio and artwork live on that device. Signing in syncs library metadata, playlists and listening data; it does not transfer downloaded audio between devices. Different origins and Safari/Home Screen storage may have separate local data. iOS can suspend a paused app or clear its website storage.
 
+When the Sonora server cannot be reached—even if the device still has Wi-Fi—the app enters offline mode. Songs remain visible, but only explicitly downloaded songs can play. Other rows are dimmed, and queue advancement skips them before changing the player. Automatic-cache-only songs do not count as downloads in this mode. Connectivity is rechecked on opening, returning to the app and periodically while visible.
+
 ## A few useful gestures
 
 - Swipe across page backgrounds to move between Home, Search, Recap and Library. Each page keeps its scroll position.

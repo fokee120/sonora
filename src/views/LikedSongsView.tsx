@@ -16,7 +16,8 @@ export const LikedSongsView: React.FC = () => {
 
   const handlePlayAll = (shuffle = false) => {
     if (likedTracks.length === 0) return;
-    const queue = [...likedTracks];
+    const queue = likedTracks.filter(track=>isOnline||offlineManager.isTrackDownloaded(track.id));
+    if(!queue.length)return;
     if(shuffle)for(let i=queue.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[queue[i],queue[j]]=[queue[j],queue[i]];}
     setQueue(queue, queue[0]);
     playTrack(queue[0], queue);
