@@ -13,7 +13,7 @@
     "test": "playwright test",
     "test:pwa": "npm run build && playwright test --config playwright.pwa.config.ts",
     "test:ui": "playwright test --config playwright.mobile.config.ts",
-    "test:unit": "tsx --test tests/audio-cancellation.test.ts tests/youtube-search.test.ts tests/catalog-discovery.test.ts tests/radio.test.ts tests/import-concurrency.test.ts",
+    "test:unit": "tsx --test tests/audio-cancellation.test.ts tests/youtube-search.test.ts tests/catalog-discovery.test.ts tests/radio.test.ts tests/import-concurrency.test.ts tests/profile-summary.test.ts",
     "screenshots": "node scripts/capture-screenshots.mjs"
   },
   "dependencies": {

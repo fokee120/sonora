@@ -15,7 +15,7 @@ export const HomeView: React.FC = () => {
   const { playTrack } = usePlayer();
   const account=useCloudAccount();
   const [picture,setPicture]=useState('');
-  useEffect(()=>{if(!account.authenticated||!account.profile){setPicture('');return;}const controller=new AbortController();const refresh=()=>{fetch('/api/account/profile/'+encodeURIComponent(account.profile!.uid),{signal:controller.signal}).then(r=>r.ok?r.json():null).then(v=>{if(v)setPicture(v.picture||'');}).catch(()=>{});};refresh();window.addEventListener('sonora:profile-changed',refresh);return()=>{controller.abort();window.removeEventListener('sonora:profile-changed',refresh);};},[account.authenticated,account.profile?.uid]);
+  useEffect(()=>{if(!account.authenticated||!account.profile){setPicture('');return;}const controller=new AbortController();const refresh=()=>{fetch('/api/account/profile/'+encodeURIComponent(account.profile!.uid)+'?summary=avatar',{signal:controller.signal}).then(r=>r.ok?r.json():null).then(v=>{if(v)setPicture(v.picture||'');}).catch(()=>{});};refresh();window.addEventListener('sonora:profile-changed',refresh);return()=>{controller.abort();window.removeEventListener('sonora:profile-changed',refresh);};},[account.authenticated,account.profile?.uid]);
   const recent = recentHistory.map(item => displayTracks.find(track => track.id === item.trackId)).filter((track): track is Track => !!track).slice(0, 6);
   const featured = recent[0] || displayTracks[0];
   const hour = new Date().getHours();
