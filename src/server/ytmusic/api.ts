@@ -22,7 +22,7 @@ const DEBUG_PERF = process.env.SONORA_DEBUG_PERF === 'true';
 // Hold slots through finalization, response streaming, and artifact disposal.
 const MAX_CONCURRENT_DIRECT_DOWNLOADS = 20;
 const transferSlots = new TransferSlots(4);
-let activeDirectDownloads = 0;
+const directSlots = new TransferSlots(MAX_CONCURRENT_DIRECT_DOWNLOADS,64);
 
 function logServerPerf(label: string, startedAt: number, extra?: Record<string, unknown>): void {
   if (!DEBUG_PERF) return;
@@ -239,7 +239,7 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
   const startedAt = Date.now();
   const controller = new AbortController();
   let jobId: string | undefined;
-  let downloadAdmitted = false;
+  let releaseDownload:(()=>void)|undefined;
   let clientDisconnected=false,timedOut=false;
   const cancel = () => {
     if (!res.writableFinished) {
@@ -272,11 +272,8 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
     // Each user gets an isolated browser session (see getSessionId above).
     const sessionId = getSessionId(req);
     if (isDownload) {
-      if (activeDirectDownloads >= MAX_CONCURRENT_DIRECT_DOWNLOADS) {
-        return res.status(503).json({ error: 'download_capacity_reached', details: 'Download capacity reached; retry shortly' });
-      }
-      activeDirectDownloads++;
-      downloadAdmitted = true;
+      releaseDownload = await directSlots.acquire(controller.signal);
+      controller.signal.throwIfAborted();
     }
     if (isDownload && req.query.requestId !== undefined) {
       if (!validDownloadRequestId(req.query.requestId)) return res.status(400).json({ error: 'Invalid download request identifier' });
@@ -355,7 +352,7 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
       if(!res.destroyed){if(res.headersSent)res.destroy();else res.status(409).json({error:'audio_cancelled',details:'Playback request was cancelled.'});}
       return;
     }
-    console.error('YT Music bridge error:', failure);
+    if(failure?.code!=='download_capacity_reached')console.error('YT Music bridge error:', failure);
     if (!res.headersSent && !res.destroyed) {
       res.removeHeader('Content-Disposition');
       res.removeHeader('X-Audio-Format');
@@ -369,7 +366,7 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
       });
     }
   } finally {
-    if (downloadAdmitted) activeDirectDownloads--;
+    releaseDownload?.();
     clearTimeout(timeout);
     res.off('close', cancel);
   }

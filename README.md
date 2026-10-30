@@ -94,6 +94,8 @@ Downloaded audio and artwork live on that device. Signing in syncs library metad
 
 When the Sonora server cannot be reached—even if the device still has Wi-Fi—the app enters offline mode. Songs remain visible, but only explicitly downloaded songs can play. Other rows are dimmed, and queue advancement skips them before changing the player. Automatic-cache-only songs do not count as downloads in this mode. Connectivity is rechecked on opening, returning to the app and periodically while visible.
 
+Busy audio downloads wait in a bounded server queue. A failed download gets three automatic retries, with five seconds between attempts; cancellation stops both active work and pending retries. An error is shown only after those retries are exhausted.
+
 ## A few useful gestures
 
 - Swipe across page backgrounds to move between Home, Search, Recap and Library. Each page keeps its scroll position.

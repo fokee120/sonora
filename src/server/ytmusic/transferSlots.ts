@@ -2,9 +2,10 @@
 export class TransferSlots {
   private active = 0;
   private waiters: Array<() => void> = [];
-  constructor(private readonly limit: number) {}
+  constructor(private readonly limit: number,private readonly maxWaiting=Infinity) {}
   async acquire(signal: AbortSignal): Promise<() => void> {
     signal.throwIfAborted();
+    if(this.active>=this.limit&&this.waiters.length>=this.maxWaiting)throw Object.assign(new Error('Download queue is full; retry shortly'),{status:503,code:'download_capacity_reached'});
     if (this.active >= this.limit) await new Promise<void>((resolve, reject) => {
       const ready = () => { signal.removeEventListener('abort', abort); resolve(); };
       const abort = () => { this.waiters = this.waiters.filter(item => item !== ready); reject(signal.reason); };

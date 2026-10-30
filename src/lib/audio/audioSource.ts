@@ -82,16 +82,7 @@ export async function fetchYoutubeAudio(track: Track, signal?: AbortSignal, down
   signal?.addEventListener('abort', cancelPolling, { once: true });
   if (signal?.aborted) cancelPolling();
   let response: Response;
-  const pending = (async () => {
-    for (let attempt = 0; ; attempt++) {
-      const result = await fetch(`${download ? youtubeDownloadUrl(track) : youtubeStreamUrl(track)}&${metadata}`, { signal, cache: 'no-store' });
-      if (!download || result.status !== 503 || attempt >= 20) return result;
-      const data = await result.clone().json().catch(() => null);
-      if (data?.error !== 'download_capacity_reached') return result;
-      await result.body?.cancel();
-      await new Promise<void>((resolve, reject) => { const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve(); }, 1500); const abort = () => { clearTimeout(timer); reject(new DOMException('Aborted', 'AbortError')); }; if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true }); });
-    }
-  })();
+  const pending = fetch(`${download ? youtubeDownloadUrl(track) : youtubeStreamUrl(track)}&${metadata}`, {signal,cache:'no-store'});
   const monitor = requestId ? (async () => {
     while (!polling.signal.aborted) {
       try {

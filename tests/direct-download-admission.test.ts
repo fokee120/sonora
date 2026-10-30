@@ -22,12 +22,12 @@ for (const outcome of ['success', 'error', 'cancel'] as const) test(`shared down
   const pending: Array<ReturnType<typeof deferred<DownloadArtifact>>> = [];
   const entered = Array.from({ length: 21 }, () => deferred());
   const disposed = deferred(), allowDispose = deferred();
-  let probingCapacity = false;
+
   directDownloader.download = async (_id, signal) => {
-    if (probingCapacity) throw new Error('unbounded admission invoked downloader');
+
     const slot = deferred<DownloadArtifact>();
     const index = pending.push(slot) - 1;
-    signal.addEventListener('abort', () => slot.reject(new Error('fixture cancelled')), { once: true });
+    signal.addEventListener('abort', () => slot.reject(signal.reason), { once: true });
     entered[index]?.resolve();
     return slot.promise;
   };
@@ -45,20 +45,16 @@ for (const outcome of ['success', 'error', 'cancel'] as const) test(`shared down
   await entered[1].promise;
   const extra = Array.from({ length: 18 }, () => fetch(url));
   await Promise.all(entered.slice(2, 20).map(item => item.promise));
+  const queuedController=new AbortController();
   try {
-    probingCapacity = true;
-    const rejected = await fetch(url);
-    probingCapacity = false;
-    assert.equal(rejected.status, 503);
-    await rejected.text();
-    assert.equal(pending.length, 20, 'capacity rejection must not invoke the downloader');
+    const queued=fetch(url,{signal:queuedController.signal});
+    await new Promise(resolve=>setTimeout(resolve,40));
+    assert.equal(pending.length,20,'a busy download waits instead of failing or starting another provider');
     if (outcome === 'success') {
       pending[0].resolve(artifact(true));
       assert.equal((await first).status, 200);
       await disposed.promise;
-      const stillFull = await fetch(url);
-      assert.equal(stillFull.status, 503, 'retain admission until artifact cleanup finishes');
-      await stillFull.text();
+      assert.equal(pending.length,20,'retain admission until artifact cleanup finishes');
       allowDispose.resolve();
     } else if (outcome === 'error') {
       pending[0].reject(new Error('fixture download failure'));
@@ -67,22 +63,10 @@ for (const outcome of ['success', 'error', 'cancel'] as const) test(`shared down
       controller.abort();
       await first;
     }
-    // The cancellation/finally continuation may run after the client observes close.
-    let recovered: Response | undefined;
-    for (let attempt = 0; attempt < 50; attempt++) {
-      const responsePromise = fetch(url);
-      const result = await Promise.race([entered[20].promise.then(() => 'admitted' as const), responsePromise]);
-      if (result === 'admitted') {
-        pending[20].resolve(artifact());
-        recovered = await responsePromise;
-        break;
-      }
-      assert.equal(result.status, 503); await result.text();
-      await new Promise(resolve => setTimeout(resolve, 10));
-    }
-    assert.ok(recovered, 'released slot must admit another request');
-    assert.equal(recovered.status, 200); await recovered.text();
+    await Promise.race([entered[20].promise,new Promise((_,reject)=>setTimeout(()=>reject(Error('queued download not admitted')),2000))]);
+    pending[20].resolve(artifact());const recovered=await queued;assert.equal(recovered.status,200);await recovered.text();
   } finally {
+    queuedController.abort();
     allowDispose.resolve();
     for (const slot of pending) slot.resolve(artifact());
     await first;
@@ -127,8 +111,7 @@ test('download admission remains occupied during response streaming and releases
     assert.equal(calls, 20, 'all twenty downloads can prepare while only four are transferring');
     await new Promise(resolve => setTimeout(resolve, 100));
     assert.equal(waitingResponses, 0, 'no fifth transfer may start while four are active');
-    const full = await fetch(url);
-    assert.equal(full.status, 503); await full.text();
+    const waitingClient=get(url,response=>response.resume());waitingClient.on('error',()=>{});clients.push(waitingClient);await new Promise(resolve=>setTimeout(resolve,60));
     assert.equal(calls, 20, 'completed provider work must not release a still-streaming slot');
     clients[0].destroy();
     await disposed.promise;

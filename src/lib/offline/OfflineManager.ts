@@ -1,3 +1,4 @@
+import {retryDownload} from './downloadRetry.js';
 import { Track, Album, Playlist, DownloadState, StorageQuotaInfo } from '../../types/index.js';
 import { dbService } from '../db.js';
 import { IAudioStorage } from './IAudioStorage.js';
@@ -262,7 +263,7 @@ export class OfflineManager {
       }
 
       this.runningDownloads++;
-      void this.executeTrackDownload(track).catch(error => console.error('Download worker failed:', error)).finally(() => { this.runningDownloads--; void this.processQueue(); });
+      void this.executeTrackDownload(track).catch(error => {if(error?.name!=='AbortError')console.error('Download worker failed:', error);}).finally(() => { this.runningDownloads--; void this.processQueue(); });
     }
   }
 
@@ -271,6 +272,7 @@ export class OfflineManager {
     this.activeControllers.set(track.id, controller);
 
     const updateState = async (updates: Partial<DownloadState>) => {
+      controller.signal.throwIfAborted();
       const existing = this.downloadsCache.get(track.id) || {
         trackId: track.id,
         status: 'queued' as const,
@@ -289,7 +291,12 @@ export class OfflineManager {
       // Cover failures never discard a successfully downloaded song.
       const artworkTask = track.artworkUrl ? cacheArtwork(track).catch(() => null) : Promise.resolve(null);
 
-      const audioRes = await fetchTrackAudio(track, controller.signal, async progress => {
+      await retryDownload(async()=>{
+      controller.signal.throwIfAborted();
+      await updateState({status:'downloading',phase:'preparing',progress:0,bytesDownloaded:0,totalBytes:track.sizeBytes||0,error:undefined});
+      let attemptResponse:Response|undefined,attemptReader:ReadableStreamDefaultReader<Uint8Array>|undefined;
+      try{
+      const audioRes = attemptResponse = await fetchTrackAudio(track, controller.signal, async progress => {
         if (!controller.signal.aborted) await updateState(progress);
       });
       controller.signal.throwIfAborted();
@@ -316,7 +323,7 @@ export class OfflineManager {
         return;
       }
 
-      const reader = audioRes.body.getReader();
+      const reader = attemptReader = audioRes.body.getReader();
       let receivedBytes = 0;
       const chunks: Uint8Array[] = [];
       let lastTransferUpdate = 0;
@@ -360,11 +367,12 @@ export class OfflineManager {
         totalBytes: combinedBlob.size,
         downloadedAt: Date.now(),
       });
+      }finally{if(attemptReader){await attemptReader.cancel().catch(()=>{});attemptReader.releaseLock();}else await attemptResponse?.body?.cancel().catch(()=>{});}
+      },controller.signal,async()=>{controller.signal.throwIfAborted();await updateState({status:'downloading',phase:'preparing',progress:0,bytesDownloaded:0,error:undefined});});
     } catch (err: any) {
-      if (err.name === 'AbortError') {
-        // Cancelled by user
-        this.downloadsCache.delete(track.id);
-        await dbService.removeDownloadState(track.id);
+      if (controller.signal.aborted) {
+        // cancelDownload already removes state; never erase a newer retry.
+        if(this.activeControllers.get(track.id)===controller){this.downloadsCache.delete(track.id);await dbService.removeDownloadState(track.id);}
       } else {
         console.error(`Download failed for track ${track.title}:`, err);
         await updateState({
@@ -373,7 +381,7 @@ export class OfflineManager {
         });
       }
     } finally {
-      this.activeControllers.delete(track.id);
+      if(this.activeControllers.get(track.id)===controller)this.activeControllers.delete(track.id);
       this.notify();
     }
   }
