@@ -28,10 +28,13 @@ test('native offline audio advances after EOF on the same iOS player without ano
   await page.evaluate(async tracks => {
     const path = '/src/lib/audio/PlayerEngine.ts'; const engine = (await import(path)).playerEngine;
     (window as any).__queueEngine = engine;
-    await engine.playTrack(tracks[0], tracks);
+    const dbPath='/src/lib/db.ts';const {dbService}=await import(dbPath);
+    await dbService.savePlaylist({id:'native-fixture',title:'Native playlist',trackIds:tracks.map(t=>t.id),createdAt:1,updatedAt:1});
+    await engine.playPlaylist('native-fixture',tracks,false);
     (window as any).__firstQueueAudio = document.querySelector('audio[data-sonora-player]');
   }, tracks);
   await expect.poll(() => page.evaluate(() => (window as any).__queueEngine.getState().currentTime)).toBeGreaterThan(0);
+  await expect.poll(() => page.evaluate(() => { const next=(window as any).__queueEngine.preparedNext; return next && {id:next.id,source:next.source}; })).toEqual({id:tracks[1].id,source:'local'});
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
     const audio = (window as any).__firstQueueAudio; audio.currentTime = audio.duration - 0.15;
@@ -42,6 +45,32 @@ test('native offline audio advances after EOF on the same iOS player without ano
   })).toEqual({ id: tracks[1].id, playing: true, source: 'local', error: null });
   expect(await page.evaluate(() => document.querySelector('audio[data-sonora-player]') === (window as any).__firstQueueAudio)).toBe(true);
   await expect.poll(() => page.evaluate(() => (window as any).__queueEngine.getState().currentTime)).toBeGreaterThan(0);
+});
+
+test('lock-screen skip assigns the prevalidated offline song synchronously', async ({ page, context }) => {
+  await page.route('**/api/**', route => route.fulfill({ json: { tracks: [], albums: [], artists: [] } }));
+  await page.route('**/api/ytmusic/download/**', route => route.fulfill({ body: wav(4), contentType: 'audio/wav' }));
+  await page.goto('/');
+  await page.evaluate(async tracks => { const path='/src/lib/offline/OfflineManager.ts'; const manager=(await import(path)).offlineManager; for(const track of tracks) await manager.downloadTrack(track); }, tracks);
+  await expect.poll(()=>page.evaluate(async tracks=>{const path='/src/lib/offline/OfflineManager.ts';const manager=(await import(path)).offlineManager;return tracks.every(track=>manager.isTrackDownloaded(track.id));},tracks)).toBe(true);
+  await context.setOffline(true);
+  // Preparing the next download must not create a second verification player.
+  await page.evaluate(async tracks => {
+    const path='/src/lib/offline/OfflineManager.ts'; const manager=(await import(path)).offlineManager;
+    const original=manager.validateLocalAudio.bind(manager);
+    manager.validateLocalAudio=async (track, blob, signal) => {
+      if (track.id === tracks[1].id) throw new Error('Unexpected second-player validation');
+      return original(track, blob, signal);
+    };
+  }, tracks);
+  await page.evaluate(async tracks=>{const path='/src/lib/audio/PlayerEngine.ts';const engine=(await import(path)).playerEngine;(window as any).__queueEngine=engine;await engine.playTrack(tracks[0],tracks);},tracks);
+  await expect.poll(()=>page.evaluate(()=>{const next=(window as any).__queueEngine.preparedNext;return next && {id:next.id,source:next.source};})).toEqual({id:tracks[1].id,source:'local'});
+  const result=await page.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});const engine=(window as any).__queueEngine;const expected=engine.preparedNext.url;engine.next();return {assigned:engine.sourceAssigned,src:(document.querySelector('audio[data-sonora-player]') as HTMLAudioElement).src,expected,source:engine.getState().playbackSource};});
+  expect(result.assigned).toBe(true);expect(result.src).toBe(result.expected);expect(result.source).toBe('local');
+  await expect.poll(()=>page.evaluate(()=>{const state=(window as any).__queueEngine.getState();return state.currentTrack?.id==='ytm:lmnopqrstuv'&&state.isPlaying&&state.currentTime>0;})).toBe(true);
+  const back=await page.evaluate(()=>{const engine=(window as any).__queueEngine;const expected=engine.previousBuffered.url;engine.previous(true);return {assigned:engine.sourceAssigned,src:(document.querySelector('audio[data-sonora-player]') as HTMLAudioElement).src,expected,source:engine.getState().playbackSource};});
+  expect(back.assigned).toBe(true);expect(back.src).toBe(back.expected);expect(back.source).toBe('local');
+  await expect.poll(()=>page.evaluate(()=>(window as any).__queueEngine.getState().currentTrack?.id)).toBe(tracks[0].id);
 });
 
 
@@ -141,6 +170,31 @@ test('manual skip while buffering waits for the ready song rather than opening a
   expect(await page.locator('audio[data-sonora-player]').getAttribute('src')).toMatch(/^blob:/);
 });
 
+
+test('returning to the app recovers a background skip whose preparation is stalled', async ({ page }) => {
+  await page.route('**/api/**', route => route.fulfill({ json: { tracks: [], albums: [], artists: [] } }));
+  await page.route('**/api/ytmusic/stream/**', route => route.fulfill({ body: wav(4), contentType: 'audio/wav' }));
+  await page.route('**/api/ytmusic/download/**', () => {});
+  await page.goto('/');
+  await page.evaluate(async tracks => {
+    const path = '/src/lib/audio/PlayerEngine.ts'; const engine = (await import(path)).playerEngine;
+    (window as any).__queueEngine = engine; await engine.playTrack(tracks[0], tracks);
+  }, tracks);
+  await expect.poll(() => page.evaluate(() => !!(window as any).__queueEngine.preparingNext)).toBe(true);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    (window as any).__queueEngine.next();
+  });
+  expect(await page.evaluate(() => (window as any).__queueEngine.getState().isLoading)).toBe(true);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect.poll(() => page.evaluate(() => {
+    const state = (window as any).__queueEngine.getState();
+    return state.currentTrack?.id === 'ytm:lmnopqrstuv' && state.isPlaying && !state.error;
+  })).toBe(true);
+});
 
 async function pendingSkip(page: Page) {
   let release!: () => void;

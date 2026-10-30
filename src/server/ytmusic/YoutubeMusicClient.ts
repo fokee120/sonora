@@ -1,3 +1,5 @@
+import { parseRadioSongs } from './radio.js';
+import { collectCatalog, linkedIds, browseHeader, textOf, walk, type CatalogArtist, type CatalogAlbum } from './catalog.js';
 /**
  * YouTube Music client (server-side)
  *
@@ -95,6 +97,8 @@ const SEARCH_FILTER_PARAMS: Record<YtmSearchFilter, string> = {
 };
 
 export interface YtmSong {
+  artistId?: string;
+  albumId?: string;
   videoId: string;
   title: string;
   artist: string;
@@ -109,6 +113,8 @@ export interface YtmSearchResult {
   query: string;
   filter: YtmSearchFilter;
   songs: YtmSong[];
+  artists?: CatalogArtist[];
+  albums?: CatalogAlbum[];
 }
 
 export interface ResolvedAudioStream {
@@ -260,10 +266,11 @@ function parseSongRenderer(renderer: JsonLike, shelfTitle: string): YtmSong | nu
 
   return {
     videoId,
+    ...linkedIds(renderer),
     title: cleanSongTitle(rawTitle),
     artist,
     album,
-    durationSeconds: parseDurationToSeconds(durationText || ''),
+    durationSeconds: parseDurationToSeconds(durationText || textOf(renderer.fixedColumns?.[0]?.musicResponsiveListItemFixedColumnRenderer?.text) || ''),
     durationText,
     thumbnailUrl:
       bestThumbnail(renderer) || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
@@ -380,7 +387,60 @@ export class YoutubeMusicClient {
       return true;
     });
 
-    return { query: trimmed, filter, songs: unique };
+    const catalog = collectCatalog(data);
+    return { query: trimmed, filter, songs: unique, artists: catalog.artists, albums: catalog.albums };
+  }
+
+
+  private radioCache = new Map<string,{time:number;songs:YtmSong[]}>();
+  private radioRequests = new Map<string,Promise<YtmSong[]>>();
+  public async radio(videoId:string):Promise<YtmSong[]> {
+    if(!/^[\w-]{11}$/.test(videoId))throw new Error('Invalid song');
+    const cached=this.radioCache.get(videoId);
+    if(cached&&Date.now()-cached.time<30*60*1000)return cached.songs;
+    const existing=this.radioRequests.get(videoId);if(existing)return existing;
+    const request=(async()=>{
+      const data=await this.innertubePost('next',{context:{client:{clientName:'WEB_REMIX',clientVersion:'1.20240401.01.00',hl:'en',gl:'US'}},videoId,playlistId:'RDAMVM'+videoId,isAudioOnly:true,enablePersistentPlaylistPanel:true});
+      const songs=parseRadioSongs(data,videoId);
+      if(!songs.length)throw new Error('Radio is unavailable for this song');
+      this.radioCache.set(videoId,{time:Date.now(),songs});
+      while(this.radioCache.size>50)this.radioCache.delete(this.radioCache.keys().next().value!);
+      return songs;
+    })();
+    this.radioRequests.set(videoId,request);
+    try{return await request;}finally{this.radioRequests.delete(videoId);}
+  }
+
+  private catalogCache = new Map<string,{time:number;value:any}>();
+  public async browse(browseId:string, continuation?:string):Promise<any>{
+    const key=browseId+':'+(continuation||'');
+    const cached=this.catalogCache.get(key);
+    if(cached&&Date.now()-cached.time<10*60*1000)return cached.value;
+    const body:JsonLike={context:{client:{clientName:'WEB_REMIX',clientVersion:'1.20240401.01.00',hl:'en',gl:'US'}}};
+    if(continuation)body.continuation=continuation;else body.browseId=browseId;
+    const data=await this.innertubePost('browse',body);
+    const parsed=collectCatalog(data),header=browseHeader(data);
+    const seen=new Set<string>();
+    const songs=parsed.rows.map(row=>parseSongRenderer(row,'Songs')).filter((song):song is YtmSong=>!!song&&!seen.has(song.videoId)&&!!seen.add(song.videoId));
+    const isArtist=browseId.startsWith('UC');
+    let next:string|undefined;
+    walk(data,n=>{
+      const token=n.nextContinuationData?.continuation||n.continuationCommand?.token;
+      if(!next&&typeof token==='string')next=token;
+    });
+    const albumArtist=parsed.artists[0];
+    const result={
+      browseId,kind:isArtist?'artist':'album',title:header.title||(!isArtist?'Album':'Artist'),description:header.description,
+      artworkUrl:header.artworkUrl,artist:isArtist?header.title:header.artist||albumArtist?.name||songs.find(s=>s.artist!=='Unknown Artist')?.artist||'',
+      year:header.year,
+      artistId:isArtist?browseId:header.artistId||albumArtist?.browseId||songs.find(s=>s.artistId)?.artistId,
+      songs:songs.map(song=>({...song,artist:isArtist?song.artist:(song.artist==='Unknown Artist'?header.artist||albumArtist?.name||song.artist:song.artist),album:isArtist?song.album:header.title||song.album,albumId:isArtist?song.albumId:browseId,artistId:song.artistId||(isArtist?browseId:header.artistId),thumbnailUrl:isArtist?song.thumbnailUrl:header.artworkUrl||song.thumbnailUrl})),
+      albums:parsed.albums.map(album=>({...album,artist:album.artist||header.title,artistId:album.artistId||(isArtist?browseId:undefined)})),
+      continuation:next,
+    };
+    if(!result.title||!songs.length&&!parsed.albums.length&&!header.title)throw new Error('This catalog page is unavailable. Try searching again.');
+    this.catalogCache.set(key,{time:Date.now(),value:result});while(this.catalogCache.size>100)this.catalogCache.delete(this.catalogCache.keys().next().value!);
+    return result;
   }
 
   /**

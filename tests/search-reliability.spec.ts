@@ -12,13 +12,13 @@ test.beforeEach(async ({ page }) => {
 });
 test('a delayed search survives loading-state renders and finishes once', async ({ page }) => {
   let requests = 0; page.on('request', req => { if (req.url().includes('/api/ytmusic/search?')) requests++; });
-  await page.getByRole('textbox', { name: 'Search songs' }).fill('miracle');
+  await page.getByRole('searchbox', { name: 'Search songs' }).fill('miracle');
   await expect(page.getByText('Result for miracle', { exact: true })).toBeVisible();
   await expect(page.getByRole('status')).toHaveCount(0);
   expect(requests).toBe(1);
 });
 test('clearing an in-flight search keeps its late results out of the page', async ({ page }) => {
-  await page.getByRole('textbox', { name: 'Search songs' }).fill('older');
+  await page.getByRole('searchbox', { name: 'Search songs' }).fill('older');
   await expect(page.getByRole('status')).toBeVisible();
   await page.getByRole('button', { name: 'Clear search', exact: true }).click();
   await expect(page.getByText('Search for your next favorite.', { exact: true })).toBeVisible();
@@ -27,7 +27,7 @@ test('clearing an in-flight search keeps its late results out of the page', asyn
   await expect(page.getByRole('status')).toHaveCount(0);
 });
 test('replacing a pending query shows only the newest results', async ({ page }) => {
-  const input = page.getByRole('textbox', { name: 'Search songs' });
+  const input = page.getByRole('searchbox', { name: 'Search songs' });
   await input.fill('older'); await expect(page.getByRole('status')).toBeVisible();
   await input.fill('newer');
   await expect(page.getByText('Result for newer', { exact: true })).toBeVisible();

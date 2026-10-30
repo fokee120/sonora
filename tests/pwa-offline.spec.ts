@@ -84,10 +84,17 @@ test('production app reopens without its server after browser restart and retain
     await page.goto(baseURL!, { waitUntil: 'domcontentloaded' });
     if (browserName === 'chromium') expect(await page.evaluate(() => navigator.onLine)).toBe(false);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    // Load previously unused theme fonts after the real origin is stopped.
+    for (const [name, font] of [['Notebook','Sonora Hand'],['Retro','Sonora Pixel']]) {
+      await page.getByRole('button', {name: name+' theme', exact:true}).click();
+      await expect(page.locator('html')).toHaveAttribute('data-style', name.toLowerCase());
+      expect(await page.evaluate(async font => (await document.fonts.load('16px "'+font+'"')).length, font)).toBeGreaterThan(0);
+    }
+    await page.getByRole('button', {name:'Default theme', exact:true}).click();
     await page.getByRole('tab', { name: 'Downloads', exact: true }).click();
     await expect(page.getByTestId('offline-readiness')).toContainText('Ready to open offline');
-    await page.locator('[data-track-id="offline-fixture"]').scrollIntoViewIfNeeded();
-    const row = page.locator('#track-row-offline-fixture');
+    await page.locator('#downloads-view').locator('[data-track-id="offline-fixture"]').scrollIntoViewIfNeeded();
+    const row = page.locator('#downloads-view').locator('#track-row-offline-fixture');
     await expect(row).toContainText('Cold start offline song');
     const saved = await page.evaluate(async () => {
       const db = await new Promise<IDBDatabase>(resolve => { const r = indexedDB.open('personal-music-player-db'); r.onsuccess = () => resolve(r.result); });
@@ -105,6 +112,24 @@ test('production app reopens without its server after browser restart and retain
     await expect(page.locator('#bottom-player-bar').getByTitle('Playing from local IndexedDB cache')).toBeVisible();
     const progress = page.locator('#bottom-player-bar [role="slider"]').first();
     await expect.poll(async () => Number(await progress.getAttribute('aria-valuenow'))).toBeGreaterThan(0);
-    await expect(page.locator('#bottom-player-bar').getByRole('alert')).toHaveCount(0);
+    await expect(page.getByTestId('dock-notices').getByRole('alert')).toHaveCount(0);
   } finally { await context.close(); await stopOrigin(); }
+});
+
+test('a production worker update keeps a paused native player attached until idle',async({page})=>{
+ await page.addInitScript(()=>{const count=Number(sessionStorage.getItem('test-shell-starts')||0)+1;sessionStorage.setItem('test-shell-starts',String(count));});
+ await page.goto('/');
+ await page.waitForFunction(()=>!!navigator.serviceWorker.controller);
+ await page.reload();await page.waitForLoadState('networkidle');
+ const before=await page.evaluate(()=>Number(sessionStorage.getItem('test-shell-starts')));
+ await page.evaluate(()=>{
+  const audio=document.createElement('audio');audio.dataset.sonoraPlayer='true';audio.src='data:audio/wav;base64,UklGRg==';audio.hidden=true;document.body.append(audio);
+  Object.defineProperty(navigator.serviceWorker,'controller',{configurable:true,get:()=>({scriptURL:new URL('/sw.js',location.href).href})});
+  navigator.serviceWorker.dispatchEvent(new Event('controllerchange'));
+ });
+ await page.waitForTimeout(400);
+ expect(await page.evaluate(()=>Number(sessionStorage.getItem('test-shell-starts')))).toBe(before);
+ expect(await page.locator('audio[data-sonora-player]').count()).toBe(1);
+ await Promise.all([page.waitForEvent('domcontentloaded'),page.evaluate(()=>{document.querySelector('audio[data-sonora-player]')?.remove();document.dispatchEvent(new Event('visibilitychange'));})]);
+ await expect.poll(()=>page.evaluate(()=>Number(sessionStorage.getItem('test-shell-starts')))).toBeGreaterThan(before);
 });

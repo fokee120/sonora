@@ -1,0 +1,22 @@
+name: Bug report
+description: Report a reproducible Sonora issue
+body:
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Include what you expected and steps to reproduce. Do not include account data or credentials.
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and browser
+      placeholder: iPhone 16 Pro · iOS version · Home Screen PWA or Safari
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots or relevant logs
+      description: Remove personal data, tokens, cookies and private playlist details before sharing.

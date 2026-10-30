@@ -1,13 +1,16 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Home, Search, Library, HardDriveDownload, Settings } from 'lucide-react';
+import { HardDriveDownload, Settings, ChartNoAxesCombined } from 'lucide-react';
+import { Home, Search, Library } from '../common/ThemeIcons.js';
 import { useApp } from '../../context/AppContext.js';
 
 export const MobileNavBar: React.FC = () => {
   const { route, navigate, storageInfo } = useApp();
 
+  if(['playlist','settings','downloads'].includes(route.type))return null;
+
   interface NavItem {
-    type: 'home' | 'search' | 'library';
+    type: 'home' | 'search' | 'recap' | 'library';
     label: string;
     icon: React.ComponentType<{ className?: string }>;
     badge?: string;
@@ -16,6 +19,7 @@ export const MobileNavBar: React.FC = () => {
   const items: NavItem[] = [
     { type: 'home', label: 'Home', icon: Home },
     { type: 'search', label: 'Search', icon: Search },
+    { type: 'recap', label: 'Recap', icon: ChartNoAxesCombined },
     { type: 'library', label: 'Library', icon: Library },
   ];
 

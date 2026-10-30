@@ -1,3 +1,4 @@
+import { getSwipePlaylist, rememberSwipePlaylist } from '../../lib/swipePlaylist.js';
 import React, { useEffect, useRef, useState } from 'react';
 import { useSwipeGesture } from '../../hooks/useSwipeGesture.js';
 import { AddToPlaylistSheet } from '../playlist/AddToPlaylistSheet.js';
@@ -14,11 +15,14 @@ import {
   Plus,
   ListPlus,
   Trash2,
+  X,
 } from 'lucide-react';
 import { Track } from '../../types/index.js';
 import { useApp } from '../../context/AppContext.js';
 import { usePlayer } from '../../hooks/usePlayer.js';
 import { offlineManager } from '../../lib/offline/OfflineManager.js';
+import { artistRoute, albumRoute } from '../../lib/ytmusic/catalog.js';
+import { notify } from './ToastHost.js';
 import { playUiSound } from '../../lib/uiFeedback.js';
 
 interface TrackRowProps {
@@ -27,6 +31,10 @@ interface TrackRowProps {
   tracksContext?: Track[];
   showAlbum?: boolean;
   reason?: string;
+  trailingAction?: React.ReactNode;
+  queueSource?: import('../../types/index.js').QueueSource;
+  onPlay?: () => void;
+  onRemoveFromPlaylist?: () => Promise<void>;
 }
 
 type RowObserverState = { update: (visible: boolean) => void };
@@ -70,8 +78,14 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
   tracksContext,
   showAlbum = true,
   reason,
+  trailingAction,
+  onRemoveFromPlaylist,
+  onPlay,
+  queueSource,
 }) => {
   const {
+    navigate,
+    addTracksToLibrary,
     isFavorite,
     toggleFavorite,
     isDownloaded,
@@ -86,15 +100,38 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
   const { currentTrack, isPlaying, playTrack, togglePlay, playNext, addToQueue } = usePlayer();
 
   const [showMenu, setShowMenu] = useState(false);
-  const [showPlaylistsSubmenu, setShowPlaylistsSubmenu] = useState(false);
+  const [menuError, setMenuError] = useState('');
+  const [removing, setRemoving] = useState(false);
   const [downloadPulse, setDownloadPulse] = useState(0);
   const rowRef = useRef<HTMLDivElement>(null);
+  const swipeActionsRef = useRef<HTMLDivElement>(null);
   const swipeFrame = useRef<number | null>(null);
   useEffect(() => () => { if (swipeFrame.current !== null) cancelAnimationFrame(swipeFrame.current); }, []);
   const [picker, setPicker] = useState(false);
   const [notice, setNotice] = useState('');
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 2000); return () => clearTimeout(timer); }, [notice]);
-  const songGestures = useSwipeGesture({ lockHorizontal: true, maxDrag: 10000, onDrag: offset => { const row = rowRef.current; if (!row) return; if (swipeFrame.current !== null) cancelAnimationFrame(swipeFrame.current); if (offset === 0) { swipeFrame.current = null; row.style.transition = 'transform .28s cubic-bezier(.2,.8,.2,1)'; row.style.transform = 'translate3d(0,0,0)'; } else { row.style.transition = 'none'; row.style.willChange = 'transform'; swipeFrame.current = requestAnimationFrame(() => { if (rowRef.current) rowRef.current.style.transform = `translate3d(${offset}px,0,0)`; swipeFrame.current = null; }); } }, exclude: 'button, a, [data-sonora-overlay]', onRight: () => { addToQueue(track); setNotice('Added to queue'); }, onLeft: () => setPicker(true) });
+  const swipeSaving = useRef(false);
+  const swipeToPlaylist = async () => {
+    if (swipeSaving.current) return;
+    const destination = playlists.find(playlist => playlist.id === getSwipePlaylist());
+    if (!destination) { rememberSwipePlaylist(null); setPicker(true); return; }
+    swipeSaving.current = true;
+    try {
+      await addTracksToLibrary([track]);
+      await addTrackToPlaylist(destination.id, track.id);
+      setNotice('Added to ' + destination.title);
+    } catch { notify('Couldn’t add this song. Try again.', true); }
+    finally { swipeSaving.current = false; }
+  };
+  const songGestures = useSwipeGesture({ lockHorizontal: true, maxDrag: 10000, onDrag: offset => { const row = rowRef.current; if (!row) return; if (swipeFrame.current !== null) cancelAnimationFrame(swipeFrame.current);
+    // Theme row fills can be translucent: only expose actions in the strip
+    // uncovered by an intentional horizontal drag, never through the row itself.
+    const actions=swipeActionsRef.current;
+    if(actions){
+      if(offset===0){delete actions.dataset.direction;actions.style.clipPath='inset(0 100% 0 0)';}
+      else{actions.dataset.direction=offset>0?'right':'left';const covered='max(0px, calc(100% - '+Math.abs(offset)+'px))';actions.style.clipPath=offset>0?'inset(0 '+covered+' 0 0)':'inset(0 0 0 '+covered+')';}
+    }
+    if (offset === 0) { swipeFrame.current = null; row.style.transition = 'transform .28s cubic-bezier(.2,.8,.2,1)'; row.style.transform = 'translate3d(0,0,0)'; } else { row.style.transition = 'none'; row.style.willChange = 'transform'; swipeFrame.current = requestAnimationFrame(() => { if (rowRef.current) rowRef.current.style.transform = `translate3d(${offset}px,0,0)`; swipeFrame.current = null; }); } }, exclude: 'button, a, [data-sonora-overlay]', onRight: () => { setNotice(addToQueue(track,queueSource) ? 'Added to queue' : 'Already in queue'); }, onLeft: () => { void swipeToPlaylist(); } });
 
   const isCurrent = currentTrack?.id === track.id;
   const isCurrentlyPlaying = isCurrent && isPlaying;
@@ -107,6 +144,7 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
     if ((e.target as HTMLElement).closest('[data-sonora-overlay]')) return;
     e.stopPropagation();
     playUiSound('tap');
+    if (onPlay) { onPlay(); return; }
     if (isCurrent) {
       togglePlay();
     } else {
@@ -118,11 +156,7 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
     e.stopPropagation();
     playUiSound(downloaded ? 'toggle' : 'download');
     setDownloadPulse((value) => value + 1);
-    if (downloaded) {
-      await removeDownload(track.id);
-    } else if (!downloading) {
-      await downloadTrack(track);
-    }
+    try { if (downloaded) { await removeDownload(track.id); notify("Download removed"); } else if (!downloading) { await downloadTrack(track); notify("Added to downloads"); } } catch { notify("Couldn’t update this download. Try again.", true); }
   };
 
   const formatBytes = (bytes: number) => bytes < 1024
@@ -138,13 +172,16 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
 
   return (
     <div className="song-row-shell relative overflow-hidden">
-    <div aria-hidden="true" className="absolute inset-0 flex items-center justify-between px-5"><ListPlus size={24} className="text-emerald-400"/><Plus size={24} className="text-blue-400"/></div>
+    <div ref={swipeActionsRef} aria-hidden="true" className="song-swipe-underlay absolute inset-0 flex items-center justify-between px-5"><span className="song-swipe-action"><ListPlus size={23}/>Queue</span><span className="song-swipe-action"><Plus size={23}/>Playlist</span></div>
     <div
       ref={rowRef}
-      style={{backgroundColor:isCurrent?'#1a202b':'#101014',touchAction:'pan-y'}}
+      style={{touchAction:'pan-y'}}
+      data-current={isCurrent}
       onTransitionEnd={event => { if (event.target === event.currentTarget && event.propertyName === 'transform') event.currentTarget.style.willChange = ''; }}
       {...songGestures}
       data-song-swipe
+      role="group" tabIndex={0} aria-label={track.title + " by " + track.artist}
+      onKeyDown={e => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); if (onPlay) onPlay(); else if (isCurrent) togglePlay(); else playTrack(track, tracksContext); } }}
       id={`track-row-${track.id}`}
       onClick={handlePlayClick}
       className={`track-row group relative flex items-center gap-3 px-4 py-3 transition cursor-pointer select-none ${
@@ -157,6 +194,7 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
       <div className="w-8 shrink-0 flex items-center justify-center text-xs font-mono text-zinc-500">
         <button
           onClick={handlePlayClick}
+          aria-label={(isCurrentlyPlaying ? "Pause " : "Play ") + track.title}
           className="w-7 h-7 rounded-full flex items-center justify-center transition group-hover:bg-blue-600 group-hover:text-white"
         >
           {isCurrentlyPlaying ? (
@@ -202,7 +240,7 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
           )}
         </div>
         <p className="text-xs text-zinc-400 truncate mt-0.5">
-          {track.artist}
+          <button className="artist-link" onClick={e=>{e.stopPropagation();navigate(artistRoute(track));}}>{track.artist}</button>
           {showAlbum && track.album && (
             <span className="text-zinc-600 hidden md:inline"> • {track.album}</span>
           )}
@@ -213,18 +251,7 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
             {downloadState.error || 'Download failed. Please try again.'}
           </p>
         )}
-        {downloading && (
-          <p role="status" className="text-xs text-blue-300 mt-1">
-            {downloadState?.status === 'queued' ? 'Queued'
-              : downloadState?.phase === 'fetching' ? `Downloading audio file${downloadState.sourceTotalBytes ? ` · ${formatBytes(downloadState.sourceBytesDownloaded || 0)} / ${formatBytes(downloadState.sourceTotalBytes)}` : ''}`
-              : downloadState?.phase === 'recording' ? `Recording ${formatDuration(downloadState.recordedSeconds || 0)} / ${formatDuration(downloadState.sourceDuration || 0)}`
-              : downloadState?.phase === 'finalizing' ? 'Finalizing full audio file'
-              : downloadState?.phase === 'waiting_transfer' ? 'Waiting to transfer to this device'
-              : downloadState?.phase === 'transferring' ? 'Saving audio to this device'
-              : downloadState?.phase === 'validating' ? 'Verifying complete audio before saving'
-              : 'Preparing audio download'}
-          </p>
-        )}
+
       </div>
 
       {/* Album name column (desktop) */}
@@ -238,14 +265,12 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
       <div className="song-row-actions flex items-center gap-2 shrink-0">
         {downloading ? (
           <button
-            className="flex items-center gap-1 text-[11px] text-blue-400 bg-blue-950/50 px-2 py-1 rounded-md border border-blue-800/40"
+            className="player-icon text-blue-400"
             title="Cancel download"
             aria-label="Cancel download"
-            onClick={e => { e.stopPropagation(); offlineManager.cancelDownload(track.id); }}
+            onClick={e => { e.stopPropagation(); offlineManager.cancelDownload(track.id); notify('Download cancelled'); }}
           >
-            <Loader2 className="w-3 h-3 animate-spin text-blue-400" />
-            <span className="font-mono">{downloadState?.progress || 0}%</span>
-            <span className="hidden sm:inline">Cancel</span>
+            <X className="w-4 h-4" />
           </button>
         ) : downloaded ? (
           <button
@@ -275,7 +300,7 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
           onClick={(e) => {
             e.stopPropagation();
             playUiSound(favorite ? 'toggle' : 'success');
-            toggleFavorite(track.id);
+            void addTracksToLibrary([track]).then(() => toggleFavorite(track.id)).then(() => notify(favorite ? 'Removed from liked songs' : 'Saved to liked songs')).catch(() => notify('Couldn’t save this song. Try again.', true));
           }}
           className={`p-1.5 transition ${
             favorite
@@ -292,6 +317,8 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
           {formatDuration(track.duration)}
         </span>
 
+        {trailingAction}
+
         {/* Context Menu Button */}
         <div className="relative">
           <button
@@ -305,88 +332,24 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
             <MoreHorizontal className="w-4 h-4" />
           </button>
 
-          {showMenu && <Overlay isOpen onClose={() => { setShowMenu(false); setShowPlaylistsSubmenu(false); }} label={`Options for ${track.title}`}>
-            <div
-              className="w-full p-4 space-y-1 text-sm text-zinc-200"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <button
-              onClick={() => {
-                  playUiSound('tap');
-                  playNext(track);
-                  setShowMenu(false);
-                }}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-white/10 hover:text-white transition"
-              >
-                <Play className="w-3.5 h-3.5" />
-                <span>Play Next</span>
-              </button>
 
-              <button
-              onClick={() => {
-                  playUiSound('tap');
-                  addToQueue(track);
-                  setShowMenu(false);
-                }}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-white/10 hover:text-white transition"
-              >
-                <ListPlus className="w-3.5 h-3.5" />
-                <span>Add to Queue</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  playUiSound('toggle');
-                  setShowPlaylistsSubmenu(!showPlaylistsSubmenu);
-                }}
-                className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-white/10 hover:text-white transition"
-              >
-                <div className="flex items-center gap-2">
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Add to Playlist</span>
-                </div>
-                <span>›</span>
-              </button>
-
-              {showPlaylistsSubmenu && (
-                <div className="my-1 pl-3 border-l border-white/10 space-y-1">
-                  {playlists.length === 0 ? (
-                    <span className="text-zinc-500 text-[11px] block py-1">No playlists yet</span>
-                  ) : (
-                    playlists.map((pl) => (
-                      <button
-                        key={pl.id}
-                        onClick={() => {
-                          playUiSound('success');
-                          addTrackToPlaylist(pl.id, track.id);
-                          setShowMenu(false);
-                        }}
-                        className="w-full text-left truncate px-2 py-1 rounded hover:bg-white/10 text-zinc-300 hover:text-white"
-                      >
-                        {pl.title}
-                      </button>
-                    ))
-                  )}
-                </div>
-              )}
-
-              {downloaded && (
-                <button
-                  onClick={() => {
-                    playUiSound('toggle');
-                    removeDownload(track.id);
-                    setShowMenu(false);
-                  }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-rose-400 hover:bg-rose-950/40 transition"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>Remove Offline File</span>
-                </button>
-              )}
+          {showMenu && <Overlay isOpen onClose={() => setShowMenu(false)} label={"Options for " + track.title}>
+            <div className="song-menu-actions w-full p-5 space-y-1 text-sm text-zinc-200" onClick={e => e.stopPropagation()}>
+              <header className="song-menu-header"><Artwork track={track}/><div><strong>{track.title}</strong><small>{track.artist}</small></div><button className="player-icon" aria-label="Close song options" onClick={() => setShowMenu(false)}><X size={20}/></button></header>
+              <button onClick={async () => { try { await addTracksToLibrary([track]); await toggleFavorite(track.id); setShowMenu(false); notify(favorite ? 'Removed from liked songs' : 'Saved to liked songs'); } catch { setMenuError('Couldn’t save this song. Try again.'); } }} className="w-full flex items-center px-2.5 rounded-lg hover:bg-white/10"><Heart size={19} fill={favorite ? 'currentColor' : 'none'}/><span>{favorite ? 'Remove from Liked Songs' : 'Save to Liked Songs'}</span></button>
+              <button onClick={() => { playNext(track,queueSource); setShowMenu(false); notify('Playing next'); }} className="w-full flex items-center px-2.5 rounded-lg hover:bg-white/10"><Play size={19}/><span>Play Next</span></button>
+              <button onClick={() => { const added = addToQueue(track,queueSource); setShowMenu(false); notify(added ? 'Added to queue' : 'Already in queue'); }} className="w-full flex items-center px-2.5 rounded-lg hover:bg-white/10"><ListPlus size={19}/><span>Add to Queue</span></button>
+              <button onClick={()=>{setShowMenu(false);navigate(artistRoute(track));}} className="w-full flex items-center px-2.5 rounded-lg hover:bg-white/10"><span className="menu-catalog-symbol" aria-hidden="true">↗</span><span>Go to artist</span></button>
+              {track.album && !["YouTube Music","YouTube Video"].includes(track.album) && <button onClick={()=>{setShowMenu(false);navigate(albumRoute(track));}} className="w-full flex items-center px-2.5 rounded-lg hover:bg-white/10"><span className="menu-catalog-symbol" aria-hidden="true">◉</span><span>Go to album</span></button>}
+              <button onClick={() => { setShowMenu(false); setPicker(true); }} className="w-full flex items-center px-2.5 rounded-lg hover:bg-white/10"><Plus size={19}/><span>Add to Playlist</span></button>
+              <button disabled={!isOnline && !downloaded && !downloading} onClick={async e => { if(downloading){offlineManager.cancelDownload(track.id);notify('Download cancelled');}else await handleDownloadToggle(e);setShowMenu(false); }} className="w-full flex items-center px-2.5 rounded-lg hover:bg-white/10"><Download size={19}/><span>{downloading ? 'Cancel download' : downloaded ? 'Remove Offline File' : 'Download song'}</span></button>
+              {onRemoveFromPlaylist && <button disabled={removing} onClick={async () => { setRemoving(true); setMenuError(''); try { await onRemoveFromPlaylist(); setShowMenu(false); notify('Removed from playlist'); } catch { setMenuError('Could not remove this song. Please try again.'); setRemoving(false); } }} className="w-full flex items-center px-2.5 rounded-lg text-rose-300 hover:bg-white/10"><Trash2 size={19}/><span>{removing ? 'Removing…' : 'Remove from playlist'}</span></button>}
+              {menuError && <p role="alert" className="px-2.5 text-rose-300">{menuError}</p>}
             </div>
           </Overlay>}
         </div>
       </div>
+      {downloading && <span className="row-download-meter" role="progressbar" aria-label={"Download progress for " + track.title} aria-valuemin={0} aria-valuemax={100} aria-valuenow={downloadState?.progress || 0}><span style={{width: Math.max(2,downloadState?.progress || 0) + "%"}}/></span>}
       {notice && <span role="status" className="song-notice">{notice}</span>}
       {picker && <AddToPlaylistSheet track={track} isOpen onClose={() => setPicker(false)} />}
     </div></div>

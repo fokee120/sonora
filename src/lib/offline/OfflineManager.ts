@@ -20,9 +20,70 @@ export class OfflineManager {
   private playlistBatches = new Map<string, { cancelled: boolean }>();
   private notificationTimer: ReturnType<typeof setTimeout> | null = null;
 
+  private initialization: Promise<void>;
+  private playlistUpdates: Promise<void> = Promise.resolve();
+  private disabledPlaylists = new Set<string>();
   private constructor() {
     this.audioStorage = new IndexedDBAudioStorage();
-    this.init();
+    this.initialization = this.init();
+    window.addEventListener('sonora:playlist-saved', event => {
+      const detail = (event as CustomEvent<{playlist: Playlist; previous?: Playlist}>).detail;
+      this.schedulePlaylist(detail.playlist.id, detail.previous);
+    });
+    window.addEventListener('online', () => { void this.processQueue(); void this.reconcileKeptPlaylists(); });
+    void this.initialization.then(() => this.reconcileKeptPlaylists()).catch(error => console.warn('Could not restore offline playlists:', error));
+  }
+
+  private schedulePlaylist(id: string, previous?: Playlist): void {
+    this.playlistUpdates = this.playlistUpdates.then(async () => {
+      await this.initialization;
+      const playlist = await dbService.getPlaylist(id);
+      if (!playlist || playlist.keepDownloaded === false || this.disabledPlaylists.has(id)) return;
+      let keep = playlist.keepDownloaded === true;
+      // Older playlists predate saved offline intent. Infer it from the list
+      // before an addition, so the new song cannot turn that intent off.
+      const priorIds = previous?.trackIds ?? playlist.trackIds;
+      if (!keep && priorIds.length) {
+        const states = await Promise.all(priorIds.map(trackId => dbService.getDownloadState(trackId)));
+        keep = states.every(state => state?.status === 'completed');
+        if (keep) await this.setPlaylistOfflineIntent(id, true);
+      }
+      if (!keep || !navigator.onLine || this.disabledPlaylists.has(id)) return;
+      const added = previous?.keepDownloaded === true
+        ? playlist.trackIds.filter(trackId => !previous.trackIds.includes(trackId))
+        : playlist.trackIds;
+      for (const trackId of added) {
+        if (this.disabledPlaylists.has(id)) break;
+        const latest = await dbService.getPlaylist(id);
+        if (!latest || latest.keepDownloaded === false || !latest.trackIds.includes(trackId)) continue;
+        const track = await dbService.getTrack(trackId);
+        if (track) await this.downloadTrack(track);
+      }
+    }).catch(error => console.warn('Could not keep playlist offline:', error));
+  }
+
+  private async reconcileKeptPlaylists(): Promise<void> {
+    await this.initialization;
+    for (const playlist of await dbService.getAllPlaylists()) this.schedulePlaylist(playlist.id);
+  }
+
+  private async setPlaylistOfflineIntent(id: string, keepDownloaded: boolean): Promise<void> {
+    await dbService.mutatePlaylist(id, playlist => ({...playlist, keepDownloaded}));
+    window.dispatchEvent(new Event('sonora:playlist-offline-changed'));
+  }
+
+  public getPlaylistDownloadProgress(playlist: Playlist): {fraction:number; completed:number; active:number; total:number} {
+    const ids = [...new Set(playlist.trackIds)];
+    let completed = 0, active = 0, sum = 0;
+    for (const id of ids) {
+      const state = this.downloadsCache.get(id);
+      if (state?.status === 'completed') { completed++; sum++; }
+      else if (state?.status === 'downloading' || state?.status === 'queued') {
+        active++;
+        if (Number.isFinite(state.progress)) sum += Math.max(0, Math.min(.99, state.progress / 100));
+      }
+    }
+    return {fraction: ids.length ? sum / ids.length : 0, completed, active, total: ids.length};
   }
 
   public static getInstance(): OfflineManager {
@@ -189,6 +250,7 @@ export class OfflineManager {
    * Process queued downloads
    */
   private async processQueue(): Promise<void> {
+    if (!navigator.onLine) return;
     while (this.downloadQueue.length > 0 && this.runningDownloads < this.maxConcurrentDownloads) {
       const track = this.downloadQueue.shift();
       if (!track) break;
@@ -330,10 +392,12 @@ export class OfflineManager {
    * Download all tracks in a playlist
    */
   public async downloadPlaylist(playlist: Playlist, tracks: Track[]): Promise<void> {
+    this.disabledPlaylists.delete(playlist.id);
+    await this.setPlaylistOfflineIntent(playlist.id, true);
     const batch = { cancelled: false }; this.playlistBatches.set(playlist.id, batch);
     const trackMap = new Map(tracks.map((t) => [t.id, t]));
     for (const trackId of playlist.trackIds) {
-      if (batch.cancelled) break;
+      if (batch.cancelled || this.disabledPlaylists.has(playlist.id)) break;
       const track = trackMap.get(trackId);
       if (track) {
         await this.downloadTrack(track);
@@ -343,6 +407,8 @@ export class OfflineManager {
   }
 
   public cancelPlaylistDownloads(playlist: Playlist): void {
+    this.disabledPlaylists.add(playlist.id);
+    void this.setPlaylistOfflineIntent(playlist.id, false).catch(() => {});
     const batch = this.playlistBatches.get(playlist.id); if (batch) batch.cancelled = true;
     for (const id of playlist.trackIds) if (this.isTrackDownloading(id)) this.cancelDownload(id);
   }
@@ -389,6 +455,8 @@ export class OfflineManager {
    * Remove entire playlist download
    */
   public async removePlaylistDownload(playlist: Playlist): Promise<void> {
+    this.disabledPlaylists.add(playlist.id);
+    await this.setPlaylistOfflineIntent(playlist.id, false);
     for (const trackId of playlist.trackIds) {
       await this.removeTrackDownload(trackId);
     }
@@ -398,6 +466,10 @@ export class OfflineManager {
    * Clear all offline downloads and cache
    */
   public async clearAllDownloads(): Promise<void> {
+    for (const playlist of await dbService.getAllPlaylists()) {
+      this.disabledPlaylists.add(playlist.id);
+      if (playlist.keepDownloaded !== false) await this.setPlaylistOfflineIntent(playlist.id, false);
+    }
     // Abort any active downloads
     for (const controller of this.activeControllers.values()) {
       controller.abort();

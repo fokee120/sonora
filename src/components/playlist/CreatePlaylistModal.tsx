@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { X, ListMusic, Plus, Search, Check, Sparkles, Youtube, Loader2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext.js';
 import { fetchYoutubeTrack } from '../../lib/ytmusic/youtubeMusic.js';
@@ -40,6 +40,9 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
   const [isImportingYoutube, setIsImportingYoutube] = useState(false);
   const [youtubeInput, setYoutubeInput] = useState('');
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (isOpen && initialTrackId) setSelectedTrackIds(previous => new Set([...previous, initialTrackId]));
+  }, [isOpen, initialTrackId]);
 
   const filteredTracks = useMemo(() => {
     if (!searchQuery.trim()) return tracks.slice(0, 20);
@@ -160,7 +163,7 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
               playUiSound('tap');
               onClose();
             }}
-            className="touch-target p-1.5 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition"
+            aria-label="Close create playlist" className="touch-target p-1.5 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition"
           >
             <X className="w-4 h-4" />
           </button>
@@ -206,33 +209,6 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
                 onChange={(e) => setDescription(e.target.value)}
                 className="w-full px-3.5 py-2 text-xs bg-zinc-950 border border-zinc-800 rounded-xl text-white placeholder:text-zinc-600 focus:outline-hidden focus:border-indigo-500 transition resize-none"
               />
-            </div>
-          </div>
-
-          {/* Theme Color Selection */}
-          <div>
-            <span className="block text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2 flex items-center gap-1.5">
-              <Sparkles className="w-3 h-3 text-indigo-400" />
-              <span>Cover Accent</span>
-            </span>
-            <div className="grid grid-cols-6 gap-2">
-              {PLAYLIST_THEMES.map((theme) => {
-                const isSelected = selectedTheme.id === theme.id;
-                return (
-                  <button
-                    key={theme.id}
-                    type="button"
-                onClick={() => setSelectedTheme(theme)}
-                    onMouseDown={() => playUiSound('toggle')}
-                    className={`h-9 rounded-xl bg-gradient-to-tr ${theme.gradient} transition relative flex items-center justify-center border ${
-                      isSelected ? 'border-white scale-105 shadow-md shadow-white/10 ring-2 ring-indigo-500/50' : 'border-transparent opacity-70 hover:opacity-100'
-                    }`}
-                    title={theme.name}
-                  >
-                    {isSelected && <Check className="w-3.5 h-3.5 text-white drop-shadow-md" />}
-                  </button>
-                );
-              })}
             </div>
           </div>
 

@@ -1,6 +1,6 @@
 // Temporary first-party diagnostics for the installed iOS playback-control issue.
 // No song names, library contents, user identifiers or playback URLs are sent.
-const build = 'track-controls-4';
+const build = 'track-controls-5';
 let sent = 0;
 let lastRegistration = '';
 export function reportMediaControls(event: string, details: Record<string, string> = {}) {

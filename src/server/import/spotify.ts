@@ -120,7 +120,7 @@ export function parsePublicSpotifyPlaylist(html: string, id: string) {
     throw fail('Spotify could not provide a public playlist preview. Check the link and make sure the playlist is public.', 422);
   }
   const items = entity.trackList.filter((track: any) => typeof track.title === 'string' && track.title.trim() && String(track.uri).startsWith('spotify:track:'))
-    .map((track: any) => ({ item: { name: track.title, artists: [{ name: track.subtitle || 'Unknown Artist' }], duration_ms: track.duration } }));
+    .map((track: any) => ({ item: { name: track.title, album:{name:track.album?.name||track.albumName||undefined}, artists: [{ name: track.subtitle || 'Unknown Artist' }], duration_ms: track.duration } }));
   if (!items.length) throw fail('This Spotify public preview contains no songs. Private playlists need a connected Spotify account.', 422);
   return { name: entity.title || entity.name || 'Spotify playlist', items: { items },
     warning: `Spotify's public preview supplied ${items.length} songs. This may be only part of the playlist; check the count before matching. No Spotify login or Premium is needed for this preview.` };
@@ -149,7 +149,7 @@ export async function fetchSpotifyPlaylist(id: string, token: string, fetcher: t
   const meta = await get(`playlists/${id}`);
   const collection = meta.items ?? meta.tracks;
   if (!collection || typeof collection.total !== 'number') throw fail('Spotify did not share this playlist’s songs. Import a playlist you own or collaborate on.', 403);
-  if (collection.total > 300) throw fail('This playlist has more than 300 entries. Split it into smaller playlists before importing.', 422);
+  if(!Number.isSafeInteger(collection.total)||collection.total<0)throw fail('Spotify returned an invalid playlist count.',502);
   const items: any[] = [];
   const endpoint = meta.items ? 'items' : 'tracks';
   for (let offset = 0; offset < collection.total; offset += 50) {

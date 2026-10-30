@@ -137,6 +137,15 @@ test('iOS track controls are restored after the audio session starts again', asy
   expect(handlers).toMatchObject({ nexttrack: 'function', previoustrack: 'function', seekforward: 'disabled', seekbackward: 'disabled' });
 });
 
+test('iOS ignores an old pause event and repairs a stale lock-screen state without undoing a real pause', async ({ page }) => {
+  await start(page);
+  const playing = await page.evaluate(async () => { const path='/src/lib/audio/PlayerEngine.ts';const engine=(await import(path)).playerEngine;const audio=(window as any).__mediaAudios.at(-1);audio.dispatchEvent(new Event('pause'));navigator.mediaSession.playbackState='paused';audio.currentTime=2;audio.dispatchEvent(new Event('timeupdate'));return {playing:engine.getState().isPlaying,native:navigator.mediaSession.playbackState}; });
+  expect(playing).toEqual({playing:true,native:'playing'});
+  await page.evaluate(async()=>{const path='/src/lib/audio/PlayerEngine.ts';(await import(path)).playerEngine.pause();});
+  await page.waitForTimeout(1200);
+  expect(await page.evaluate(async()=>{const path='/src/lib/audio/PlayerEngine.ts';return {playing:(await import(path)).playerEngine.getState().isPlaying,native:navigator.mediaSession.playbackState};})).toEqual({playing:false,native:'paused'});
+});
+
 
 test('iOS automatically advances a queue on the same unlocked audio element', async ({ page }) => {
   await start(page);
@@ -147,10 +156,10 @@ test('iOS automatically advances a queue on the same unlocked audio element', as
     first.dispatchEvent(new Event('ended'));
     await Promise.resolve(); await Promise.resolve();
     return { same: first === audios.at(-1), addedPlayers: audios.length - count,
-      nextId: engine.getState().currentTrack?.id, playing: engine.getState().isPlaying,
-      nativeState: navigator.mediaSession.playbackState };
+      nextId: engine.getState().currentTrack?.id };
   });
-  expect(result).toEqual({ same: true, addedPlayers: 0, nextId: tracks[1].id, playing: true, nativeState: 'playing' });
+  expect(result).toEqual({ same: true, addedPlayers: 0, nextId: tracks[1].id });
+  await expect.poll(() => page.evaluate(async () => { const path='/src/lib/audio/PlayerEngine.ts'; return {playing:(await import(path)).playerEngine.getState().isPlaying,native:navigator.mediaSession.playbackState}; })).toEqual({playing:true,native:'playing'});
 });
 
 test('iOS interface sounds never create a competing audio session', async ({ page }) => {
@@ -174,4 +183,99 @@ test('iOS repeated lock-screen taps cannot accumulate queue changes while switch
     return engine.getState().currentTrack?.id;
   }, tracks);
   expect(result).toBe(tracks[1].id);
+});
+
+test('iOS long-pause Play reconnects an expired capture at its saved position on the same native element', async ({page})=>{
+ await start(page);
+ await page.evaluate(()=>{
+  const audio=(window as any).__mediaAudios.at(-1);audio.currentTime=47;audio.dispatchEvent(new Event('timeupdate'));
+  (window as any).__mediaHandlers.pause();
+ });
+ const before=await page.evaluate(()=>({src:(window as any).__mediaAudios.at(-1).src,count:(window as any).__mediaAudios.length,paused:navigator.mediaSession.playbackState}));
+ expect(before.paused).toBe('paused');
+ await page.evaluate(async()=>{const p='/src/lib/audio/PlayerEngine.ts';const engine=(await import(p)).playerEngine;(engine as any).pausedAt=Date.now()-120_000;(window as any).__resumeAudio=(engine as any).audio;Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});(window as any).__mediaHandlers.play();});
+ await expect.poll(()=>page.evaluate(()=>(window as any).__mediaAudios.at(-1).src)).toContain('start=47');
+ const result=await page.evaluate(async()=>{const p='/src/lib/audio/PlayerEngine.ts';const engine=(await import(p)).playerEngine;return{same:(engine as any).audio===(window as any).__resumeAudio,count:(window as any).__mediaAudios.length,position:engine.getState().currentTime,id:engine.getState().currentTrack.id};});
+ expect(result.same).toBe(true);expect(result.count).toBe(before.count);expect(result.position).toBe(47);expect(result.id).toBe(tracks[0].id);
+});
+test('iOS paused native sources remain attached and page-show repair never starts playback',async({page})=>{
+ await start(page);
+ const result=await page.evaluate(async()=>{const p='/src/lib/audio/PlayerEngine.ts';const engine=(await import(p)).playerEngine;const audio=(engine as any).audio,src=audio.src;audio.currentTime=31;audio.dispatchEvent(new Event('timeupdate'));engine.pause();window.dispatchEvent(new PageTransitionEvent('pageshow'));return{src:audio.src,original:src,paused:audio.paused,position:engine.getState().currentTime,state:navigator.mediaSession.playbackState,play:typeof(window as any).__mediaHandlers.play};});
+ expect(result.src).toBe(result.original);expect(result.paused).toBe(true);expect(result.position).toBe(31);expect(result.state).toBe('paused');expect(result.play).toBe('function');
+});
+test('iOS resumes a complete prepared current source after a long pause without reopening a live stream',async({page})=>{
+ await start(page);
+ await page.evaluate(async()=>{const p='/src/lib/audio/PlayerEngine.ts';const engine=(await import(p)).playerEngine,audio=(engine as any).audio;audio.currentTime=52;audio.dispatchEvent(new Event('timeupdate'));engine.pause();(engine as any).resumeBuffer={id:engine.getState().currentTrack.id,duration:180,url:URL.createObjectURL(new Blob(['fixture'],{type:'audio/mpeg'})),source:'cloud'};(engine as any).pausedAt=Date.now()-120_000;await engine.play();});
+ const result=await page.evaluate(async()=>{const p='/src/lib/audio/PlayerEngine.ts';const engine=(await import(p)).playerEngine;return{src:(engine as any).audio.src,seek:(engine as any).nativeSeekOnMetadata,position:engine.getState().currentTime,sourceOffset:(engine as any).sourceOffset};});expect(result.src).toMatch(/^blob:/);expect(result.seek).toBe(52);expect(result.position).toBe(52);expect(result.sourceOffset).toBe(0);
+});
+test('iOS restores the paused song position after the page is discarded without autoplay',async({page})=>{
+ await start(page);await page.evaluate(()=>{const audio=(window as any).__mediaAudios.at(-1);audio.currentTime=67;audio.dispatchEvent(new Event('timeupdate'));(window as any).__mediaHandlers.pause();});
+ await page.reload();await expect(page.locator('#bottom-player-bar')).toBeVisible();
+ const result=await page.evaluate(async()=>{const p='/src/lib/audio/PlayerEngine.ts';const engine=(await import(p)).playerEngine;return{time:engine.getState().currentTime,playing:engine.getState().isPlaying,id:engine.getState().currentTrack?.id};});expect(result.time).toBe(67);expect(result.playing).toBe(false);expect(result.id).toBe(tracks[0].id);
+ await page.evaluate(()=>(window as any).__mediaHandlers.play());await expect.poll(()=>page.evaluate(()=>(window as any).__mediaAudios.at(-1).src)).toContain('start=67');
+});
+
+// Model the native UI independently: WebKit can retain the declared JS value
+// while replacing the underlying Now Playing session during a source handoff.
+async function emulateStaleNativeSession(page: Page) {
+  await page.evaluate(() => {
+    const session = navigator.mediaSession;
+    const state = Object.getOwnPropertyDescriptor(MediaSession.prototype, 'playbackState')!;
+    const metadata = Object.getOwnPropertyDescriptor(MediaSession.prototype, 'metadata')!;
+    (window as any).__nativePlayback = 'paused';
+    Object.defineProperty(session, 'playbackState', {
+      configurable: true,
+      get: () => state.get!.call(session),
+      set: value => {
+        const previous = state.get!.call(session);
+        state.set!.call(session, value);
+        // WebKit's setter returns early when the declared value is unchanged.
+        if (previous !== value) (window as any).__nativePlayback = value;
+      },
+    });
+    Object.defineProperty(session, 'metadata', {
+      configurable: true,
+      get: () => metadata.get!.call(session),
+      set: value => { metadata.set!.call(session, value); (window as any).__nativePlayback = 'paused'; },
+    });
+    const register = session.setActionHandler.bind(session);
+    session.setActionHandler = (action, handler) => {
+      register(action, handler);
+      (window as any).__nativePlayback = 'paused';
+    };
+  });
+}
+
+test('iOS republishes Playing after native controls and artwork refresh, even when the declared state is already playing', async ({ page }) => {
+  await emulateStaleNativeSession(page);
+  await start(page);
+  await expect.poll(() => page.evaluate(() => navigator.mediaSession.metadata?.artwork[0]?.sizes)).toBe('1200x1200');
+  expect(await page.evaluate(() => (window as any).__nativePlayback)).toBe('playing');
+  await page.waitForTimeout(1100);
+  expect(await page.evaluate(() => (window as any).__nativePlayback)).toBe('playing');
+  await page.evaluate(() => {
+    (window as any).__nativePlayback = 'paused';
+    (window as any).__mediaAudios.at(-1).dispatchEvent(new Event('playing'));
+  });
+  expect(await page.evaluate(() => (window as any).__nativePlayback)).toBe('playing');
+  await start(page, 1);
+  await expect.poll(() => page.evaluate(() => navigator.mediaSession.metadata?.title)).toBe('Second song');
+  await expect.poll(() => page.evaluate(() => navigator.mediaSession.metadata?.artwork[0]?.sizes)).toBe('1200x1200');
+  expect(await page.evaluate(() => (window as any).__nativePlayback)).toBe('playing');
+});
+
+test('iOS a real pause survives delayed artwork, remote-control refresh and pending Playing updates', async ({ page }) => {
+  await emulateStaleNativeSession(page);
+  await start(page);
+  await page.evaluate(() => (window as any).__mediaHandlers.pause());
+  await expect.poll(() => page.evaluate(() => navigator.mediaSession.metadata?.artwork[0]?.sizes)).toBe('1200x1200');
+  await page.waitForTimeout(1100);
+  expect(await page.evaluate(() => ({ declared: navigator.mediaSession.playbackState, native: (window as any).__nativePlayback, paused: (window as any).__mediaAudios.at(-1).paused }))).toEqual({ declared: 'paused', native: 'paused', paused: true });
+});
+
+test('iOS refresh survives native same-task coalescing without releasing the media session',async({page})=>{
+ await start(page);await expect.poll(()=>page.evaluate(()=>navigator.mediaSession.metadata?.artwork[0]?.sizes)).toBe('1200x1200');await page.waitForTimeout(1100);
+ await page.evaluate(async()=>{const session=navigator.mediaSession,descriptor=Object.getOwnPropertyDescriptor(MediaSession.prototype,'playbackState')!;let committed=session.playbackState,pending=committed,timer:any=null;(window as any).__coalescedNative='paused';(window as any).__sessionWrites=[];Object.defineProperty(session,'playbackState',{configurable:true,get:()=>descriptor.get!.call(session),set:value=>{descriptor.set!.call(session,value);(window as any).__sessionWrites.push(value);pending=value;if(timer===null)timer=setTimeout(()=>{timer=null;if(pending!==committed){committed=pending;(window as any).__coalescedNative=pending;}},0);}});const p='/src/lib/audio/PlayerEngine.ts';(await import(p)).playerEngine.setupMediaSession();});
+ await expect.poll(()=>page.evaluate(()=>(window as any).__coalescedNative)).toBe('playing');expect(await page.evaluate(()=>(window as any).__sessionWrites.includes('none'))).toBe(false);
+ await page.evaluate(async()=>{const p='/src/lib/audio/PlayerEngine.ts',e=(await import(p)).playerEngine;e.setupMediaSession();e.pause();});await expect.poll(()=>page.evaluate(()=>(window as any).__coalescedNative)).toBe('paused');
 });

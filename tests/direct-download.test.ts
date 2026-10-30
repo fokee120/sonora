@@ -78,7 +78,7 @@ import { mkdtemp, writeFile, rm, readFile, readdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { parseBuffer } from 'music-metadata';
-import { DirectDownloader } from '../src/server/bridge/DirectDownloader.js';
+import { canRefreshDirectSource, DirectDownloader } from '../src/server/bridge/DirectDownloader.js';
 
 const id = () => randomBytes(8).toString('base64url').slice(0, 11);
 async function fixture(mode = 'complete') {
@@ -89,11 +89,14 @@ async function fixture(mode = 'complete') {
   assert.equal(generated.status, 0, generated.stderr.toString());
   const script = join(root, 'cli.cjs');
   await writeFile(script, `const fs=require('node:fs'),path=require('node:path'); const args=process.argv.slice(2); const target=args[args.indexOf('-o')+1].replace('%(ext)s',${JSON.stringify(extension)}); const id=new URL(args.at(-1)).searchParams.get('v');
+  const countPath=${JSON.stringify(join(root, 'attempts.json'))},attempt=fs.existsSync(countPath)?Number(fs.readFileSync(countPath,'utf8'))+1:1;fs.writeFileSync(countPath,String(attempt));
+  if(${JSON.stringify(mode)}==='retry-always'||(${JSON.stringify(mode)}==='retry-once'&&attempt===1)||${JSON.stringify(mode)}==='access-denied'){fs.writeFileSync(target+'.part','stale');fs.writeFileSync(target.replace(/\\.(webm|m4a)$/,'.info.json'),'stale');console.error(${JSON.stringify(mode)}==='access-denied'?'ERROR: Sign in to confirm your age.':'ERROR: unable to download video data: HTTP Error 403: Forbidden');process.exit(1);}
+  if(fs.existsSync(target+'.part')){console.error('Stale partial source was reused');process.exit(2);}
   fs.copyFileSync(${JSON.stringify(media)},target); const size=fs.statSync(target).size;
   console.log('SONORA_PROGRESS:'+JSON.stringify({downloaded_bytes:Math.floor(size/2),total_bytes:size}));
   setTimeout(()=>{fs.writeFileSync(target.replace(/\\.(webm|m4a)$/,'.info.json'),JSON.stringify({id,duration:${mode === 'incomplete' ? 20 : 2}})); console.log('SONORA_PROGRESS:'+JSON.stringify({downloaded_bytes:size,total_bytes:size})); ${mode === 'malformed' ? "fs.writeFileSync(target,'invalid media');" : ''}},150);
   ${mode === 'hang' ? "setInterval(()=>{},1000);" : ''}`);
-  return { downloader: new DirectDownloader({ executable: process.execPath, args: [script] }), dispose: () => rm(root, { recursive: true, force: true }) };
+  return { attempts:async()=>Number(await readFile(join(root,'attempts.json'),'utf8')), downloader: new DirectDownloader({ executable: process.execPath, args: [script] }), dispose: () => rm(root, { recursive: true, force: true }) };
 }
 
 test('direct subprocess reports source bytes and produces independently decoded seekable full audio', async () => {
@@ -111,3 +114,8 @@ test('direct subprocess reports source bytes and produces independently decoded 
     } finally { await file.dispose(); }
   } finally { await f.dispose(); }
 });
+
+test('a transient 403 re-extracts the source and removes failed partial data before success',async()=>{const f=await fixture('retry-once');try{const artifact=await f.downloader.download(id(),new AbortController().signal);try{assert.equal(await f.attempts(),2);assert.ok(artifact.duration>1.8);}finally{await artifact.dispose();}}finally{await f.dispose();}});
+test('repeated 403s stop after three attempts',async()=>{const f=await fixture('retry-always');try{await assert.rejects(f.downloader.download(id(),new AbortController().signal),/HTTP Error 403/);assert.equal(await f.attempts(),3);}finally{await f.dispose();}});
+test('cancelling recovery stops before a new extraction',async()=>{const f=await fixture('retry-once'),controller=new AbortController();let preparations=0;try{await assert.rejects(f.downloader.download(id(),controller.signal,'webm',state=>{if(state.phase==='preparing'&&++preparations===2)controller.abort();}),/abort/i);assert.equal(await f.attempts(),1);}finally{await f.dispose();}});
+test('access restrictions are not treated as refreshable download URLs',async()=>{const f=await fixture('access-denied');try{await assert.rejects(f.downloader.download(id(),new AbortController().signal),/Sign in/);assert.equal(await f.attempts(),1);assert.equal(canRefreshDirectSource(Error('HTTP Error 403: Forbidden')),false);assert.equal(canRefreshDirectSource(Error('unable to download video data: HTTP Error 403: Forbidden')),true);}finally{await f.dispose();}});

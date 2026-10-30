@@ -115,6 +115,7 @@ function parseDurationToSeconds(text: string): number {
 
 /** Spotify Web API playlist payload -> ImportedPlaylist. */
 export function parseSpotifyPlaylistResponse(data: any, sourceId: string): ImportedPlaylist {
+  if(Array.isArray(data?.tracks))return {source:'spotify',sourceId,title:String(data.title||data.name||'Spotify playlist'),tracks:data.tracks.filter((t:any)=>typeof t.title==='string'&&t.title.trim()).map((t:any)=>({title:t.title.trim(),artist:String(t.artist||''),...(t.album?{album:String(t.album)}:{})})),...(data.warning?{warning:String(data.warning)}:{})};
   const items: any[] = data?.items?.items || data?.tracks?.items || [];
   const tracks: ImportedTrack[] = items
     .map((item) => item?.item || item?.track)
@@ -165,3 +166,7 @@ export async function fetchImportedPlaylist(
   if (parsed.source === 'spotify') return parseSpotifyPlaylistResponse(data, parsed.id);
   return { ...(Array.isArray(data?.tracks) ? {source:parsed.source,sourceId:parsed.id,tracks:data.tracks} : parseYtmPlaylistResponse(data?.raw, parsed.id)), title: data?.title || 'YouTube Music playlist' };
 }
+
+/** Spotify URL imports expose only title and artist in each JSON song record. */
+export function spotifyImportJson(data:any,id:string){const playlist=parseSpotifyPlaylistResponse(data,id);const missing=playlist.tracks.some(t=>!t.artist||t.artist==='Unknown Artist');return {source:'spotify',sourceId:id,title:playlist.title,tracks:playlist.tracks.map(t=>({title:t.title,artist:t.artist==='Unknown Artist'?'':t.artist})),...((playlist.warning||missing)?{warning:[playlist.warning,missing?'Spotify did not provide artist names for some songs; those entries will be matched by title.':''].filter(Boolean).join(' ')}:{})};}
+export function importedTrackQuery(entry:ImportedTrack){return [entry.title,entry.artist?.trim()&&entry.artist!=='Unknown Artist'?entry.artist:entry.album].filter(Boolean).join(' ').trim();}

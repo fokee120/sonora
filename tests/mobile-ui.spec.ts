@@ -64,10 +64,12 @@ test('playlists are first, categories and cloud integration are removed, and dow
  for(const width of [375,320,430]) {await page.setViewportSize({width,height:844});await expect.poll(()=>page.locator('#settings-view').evaluate(e=>e.scrollWidth<=e.clientWidth)).toBe(true);}
 });
 
-test('swiping the page moves between Home, Search and Library',async({page})=>{
+test('swiping the page moves between Home, Search, Recap and Library',async({page})=>{
  await setup(page);await swipe(page,page.locator('#home-view h1'),-130);await expect(page.locator('#search-view')).toBeVisible();
- await swipe(page,page.locator('#search-view h1'),-130);await expect(page.locator('#library-view')).toBeVisible();
- await swipe(page,page.locator('#library-view h1'),130);await expect(page.locator('#search-view')).toBeVisible();
+ await swipe(page,page.locator('#search-view h1'),-130);await expect(page.locator('#recap-view')).toBeVisible();
+ await swipe(page,page.locator('#recap-view h1'),-130);await expect(page.locator('#library-view')).toBeVisible();
+ await swipe(page,page.locator('#library-view h1'),130);await expect(page.locator('#recap-view')).toBeVisible();
+ await swipe(page,page.locator('#recap-view h1'),130);await expect(page.locator('#search-view')).toBeVisible();
 });
 
 test('library tabs switch on one tap and song rows have square corners and separators',async({page})=>{

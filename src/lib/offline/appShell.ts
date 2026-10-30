@@ -33,11 +33,18 @@ export async function prepareOfflineApp() {
       updating = true;
       let unsubscribe: (() => void) | undefined;
       let reloading = false;
-      unsubscribe = playerEngine.subscribe(state => {
-        if (reloading || state.isPlaying || state.isLoading) return;
+
+      const reloadWhenIdle = (state: ReturnType<typeof playerEngine.getState>) => {
+        // A paused iOS element still owns the lock-screen session. Reloading
+        // here discards that session even though no music is currently audible.
+        const retainedNativeSource = document.querySelector('audio[data-sonora-player][src]');
+        if (reloading || state.isPlaying || state.isLoading || document.visibilityState !== 'visible' || retainedNativeSource) return;
         reloading = true;
-        queueMicrotask(() => { unsubscribe?.(); location.reload(); });
-      });
+        queueMicrotask(() => { unsubscribe?.(); document.removeEventListener('visibilitychange', onVisibility); location.reload(); });
+      };
+      const onVisibility = () => reloadWhenIdle(playerEngine.getState());
+      document.addEventListener('visibilitychange', onVisibility);
+      unsubscribe = playerEngine.subscribe(reloadWhenIdle);
     });
   }
   let registration: ServiceWorkerRegistration | undefined;

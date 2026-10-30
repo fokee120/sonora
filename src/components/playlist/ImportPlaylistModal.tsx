@@ -75,6 +75,7 @@ export const ImportPlaylistModal: React.FC<ImportPlaylistModalProps> = ({ isOpen
     setProgress('Fetching playlist…');
     try {
       const playlist = await fetchImportedPlaylist(parsed);
+      if(parsed.source==='spotify'){setProgress('Importing songs by title and artist…');const created=await createPlaylist(playlist.title,playlist.description||'Imported from Spotify');await startImport(created.id,playlist);navigate({type:'playlist',id:created.id});onClose();reset();return;}
       setImported(playlist);
       setPhase('fetched');
       setProgress('');
@@ -126,11 +127,11 @@ export const ImportPlaylistModal: React.FC<ImportPlaylistModalProps> = ({ isOpen
 
         {spotify && !spotify.connected && <div className="text-xs text-zinc-400">
           {spotify.configured ? <a href="/api/spotify/login" onClick={() => sessionStorage.setItem('sonora:import-url', url)} className="font-semibold text-emerald-400">Connect Spotify</a>
-            : <p>Public playlist previews are available now. A full Spotify account connection needs host setup and a Premium app owner.</p>}
+            : <p>Public Spotify playlists import directly. No Spotify login, Premium, or developer setup required.</p>}
         </div>}
         {phase === 'url' || phase === 'matching' ? (
           <div className="flex flex-col sm:flex-row gap-2">
-            <input autoFocus aria-label="Playlist URL" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Spotify or YouTube Music playlist link"
+            <input aria-label="Playlist URL" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Spotify or YouTube Music playlist link"
               className="min-w-0 flex-1 px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-base sm:text-sm text-zinc-100 placeholder:text-zinc-600" />
             <button onClick={handleFetch} disabled={phase === 'matching' || !url.trim()}
               className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold disabled:opacity-40 flex items-center gap-1.5">

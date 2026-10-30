@@ -11,6 +11,8 @@ import { Track } from '../../types/index.js';
 export type YtmFilter = 'songs' | 'videos' | 'albums' | 'artists';
 
 export interface YtmSongDto {
+  artistId?: string;
+  albumId?: string;
   videoId: string;
   title: string;
   artist: string;
@@ -42,6 +44,8 @@ export function youtubeVideoId(track: Track): string {
 export function ytmSongToTrack(song: YtmSongDto): Track {
   return {
     id: `ytm:${song.videoId}`,
+    artistId: song.artistId,
+    albumId: song.albumId,
     title: song.title || 'Unknown Title',
     artist: song.artist || 'Unknown Artist',
     album: song.album || (song.isVideo ? 'YouTube Video' : 'YouTube Music'),
@@ -178,4 +182,11 @@ export async function testAudioBackend(): Promise<DownloaderTestResult> {
     throw new Error('Sonora returned an invalid audio backend test response.');
   }
   return data;
+}
+
+export async function fetchYoutubeRadio(videoId:string,signal?:AbortSignal):Promise<Track[]> {
+ if(!/^[\w-]{11}$/.test(videoId))return [];
+ const response=await fetch('/api/ytmusic/radio/'+encodeURIComponent(videoId),{signal});
+ if(!response.ok)throw new Error('YouTube Music radio is unavailable');
+ const data=await response.json();return (Array.isArray(data.songs)?data.songs:[]).map(ytmSongToTrack);
 }

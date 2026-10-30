@@ -1,16 +1,6 @@
-/**
- * Recommendations: score the user's own library against their taste,
- * and build the searches that produce "suggested songs" from
- * YouTube Music's catalog.
- *
- * Honest boundary, stated in the UI too: Sonora's YouTube Music
- * access is unauthenticated InnerTube search and an anonymous
- * Chromium bridge profile (see ChromiumBridge.ts). There is no
- * signed-in YouTube Music home feed to read today, so suggestions
- * are taste-derived (your plays, likes, playlists, preferences)
- * searched against the same YTM catalog — not your YTM account's
- * home page. The day a YTM login lands in the bridge, these same
- * queries become the fallback, not the source.
+/** Local taste scoring and search fallback for the unified Home discovery mix.
+ * The main discovery source is song-seeded YouTube Music radio; these helpers
+ * supplement it with unplayed library songs and handle unavailable radio seeds.
  */
 
 import type { Track } from '../types/index.js';
@@ -23,7 +13,7 @@ export interface RecommendedTrack {
 }
 
 function normalize(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  return value.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
 }
 
 export function scoreLibraryTrack(
@@ -91,14 +81,23 @@ export function trackSimilarity(
   return Math.min(1, jaccard + artistBonus);
 }
 
-export function matchImportedTrack<T extends { title: string; artist: string }>(
-  imported: { title: string; artist: string },
+export function matchImportedTrack<T extends { title: string; artist: string; album?:string }>(
+  imported: { title: string; artist: string; album?:string },
   candidates: T[],
   threshold: number = 0.5
 ): { track: T; score: number } | null {
   let best: { track: T; score: number } | null = null;
   for (const candidate of candidates) {
-    const score = trackSimilarity(imported, candidate);
+    let score = trackSimilarity(imported, candidate);
+    if(!imported.artist?.trim()||imported.artist==='Unknown Artist'){
+      const titleScore=trackSimilarity({title:imported.title,artist:''},{title:candidate.title,artist:''});
+      if(titleScore<.8)continue;
+      if(imported.album?.trim()){
+        const albumScore=trackSimilarity({title:imported.album,artist:''},{title:candidate.album||'',artist:''});
+        if(albumScore<.65)continue;
+        score=titleScore*.75+albumScore*.25;
+      }else score=titleScore;
+    }
     if (score >= threshold && (!best || score > best.score)) best = { track: candidate, score };
   }
   return best;

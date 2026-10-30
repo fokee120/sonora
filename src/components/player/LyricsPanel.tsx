@@ -1,0 +1,7 @@
+import React,{useEffect,useRef} from 'react';
+import {X} from 'lucide-react';
+import {usePlayer} from '../../hooks/usePlayer.js';
+import type {SongLyrics} from '../../lib/lyrics.js';
+export function LyricsPanel({lyrics,title,onClose}:{lyrics:SongLyrics;title:string;onClose:()=>void}){const {currentTime,seek}=usePlayer(),root=useRef<HTMLDivElement>(null),touch=useRef(0);let active=-1;for(let i=0;i<lyrics.lines.length;i++)if(lyrics.lines[i].time<=currentTime)active=i;
+ useEffect(()=>{if(Date.now()-touch.current<4000)return;const line=root.current?.querySelector<HTMLElement>('[data-active="true"]');if(line&&root.current)root.current.scrollTo({top:line.offsetTop-root.current.offsetTop-root.current.clientHeight*.35,behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'instant':'smooth'});},[active]);
+ return <div className="lyrics-full-view"><header><div><p className="eyebrow">{lyrics.lines.length?'LIVE LYRICS':'LYRICS'}</p><h2>{title}</h2></div><button className="player-icon" aria-label="Close lyrics" onClick={onClose}><X size={22}/></button></header><div ref={root} className="lyrics-lines" onPointerDown={()=>touch.current=Date.now()} onWheel={()=>touch.current=Date.now()}>{lyrics.lines.length?lyrics.lines.map((line,i)=><button key={i} data-active={i===active} onClick={()=>seek(line.time)} aria-current={i===active?'true':undefined}>{line.text||'♪'}</button>):<p>{lyrics.plain}</p>}</div><small>Lyrics from LRCLIB</small></div>;}

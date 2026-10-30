@@ -100,7 +100,7 @@ test('Spotify imports renamed items, paginates all entries, and reads legacy pay
 test('restricted and incomplete Spotify playlists are errors, never empty successful imports', async () => {
   await assert.rejects(fetchSpotifyPlaylist('abc', 'fixture', async () => Response.json({ name: 'Restricted' })), /own or collaborate/);
   await assert.rejects(fetchSpotifyPlaylist('abc', 'fixture', async () => Response.json({}, { status: 403 })), /account is allowed/);
-  await assert.rejects(fetchSpotifyPlaylist('abc', 'fixture', async () => Response.json({ items: { total: 301 } })), /more than 300/);
+  await assert.rejects(fetchSpotifyPlaylist('abc', 'fixture', async () => Response.json({ items: { total: -1 } })), /invalid playlist count/);
   await assert.rejects(fetchSpotifyPlaylist('abc', 'fixture', async url => Response.json(String(url).includes('?') ? { items: [] } : { items: { total: 2 } })), /incomplete/);
 });
 
@@ -119,3 +119,5 @@ test('public Spotify preview needs no login, keeps the limit warning, and reject
   assert.throws(() => parsePublicSpotifyPlaylist('<html>Private playlist</html>', 'abc'), /public playlist preview/);
   assert.throws(() => parsePublicSpotifyPlaylist(html({ ...entity, trackList: [] }), 'abc'), /contains no songs/);
 });
+
+test('Spotify pagination imports all 1201 songs without a Sonora size cap',async()=>{const playlist=await fetchSpotifyPlaylist('large','fixture',async input=>{const url=new URL(String(input));if(!url.search)return Response.json({name:'Large playlist',items:{total:1201}});const offset=Number(url.searchParams.get('offset'));return Response.json({items:Array.from({length:Math.min(50,1201-offset)},(_,i)=>({item:{name:'Song '+(offset+i),artists:[{name:'Artist'}]}}))});});const parsed=parseSpotifyPlaylistResponse(playlist,'large');assert.equal(parsed.tracks.length,1201);assert.equal(parsed.tracks[1200].title,'Song 1200');});

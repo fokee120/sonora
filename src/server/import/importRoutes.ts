@@ -1,6 +1,7 @@
-import { parseYtmPlaylistResponse } from '../../lib/playlistImport.js';
+import {fetchAnonymousSpotifyPlaylist} from './spotifyPublic.js';
+import { spotifyImportJson, parseYtmPlaylistResponse } from '../../lib/playlistImport.js';
 import express from 'express';
-import { spotifyIntegration, fetchSpotifyPlaylist, fetchPublicSpotifyPlaylist } from './spotify.js';
+import { spotifyIntegration, fetchSpotifyPlaylist } from './spotify.js';
 
 /**
  * Playlist import endpoints (persistent host only; Vercel
@@ -31,11 +32,11 @@ app.post('/api/import/spotify', async (req, res) => {
   try {
     try {
       const token = await spotifyIntegration.getAccessToken(req);
-      return res.json(await fetchSpotifyPlaylist(id, token));
+      return res.json(spotifyImportJson(await fetchSpotifyPlaylist(id, token),id));
     } catch (error: any) {
-      if (![401, 403, 404].includes(error.status)) throw error;
+      if (![401, 403, 404, 503].includes(error.status)) throw error;
       // Only public metadata is read here; private API access is never assumed.
-      return res.json(await fetchPublicSpotifyPlaylist(id));
+      return res.json(spotifyImportJson(await fetchAnonymousSpotifyPlaylist(id),id));
     }
   } catch (err: any) {
     const status = err?.status || 502;

@@ -1,4 +1,5 @@
 import express from 'express';
+import googleLibrary from './src/server/accounts/googleLibrary.js';
 import path from 'path';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
@@ -11,6 +12,7 @@ dotenv.config();
 const PORT = Number(process.env.PORT || 3000);
 const app = express();
 
+app.use('/api/account',googleLibrary);
 app.use(express.json());
 
 // Temporary bounded diagnostic output for iOS PWA controls. Accept only known,

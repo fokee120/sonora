@@ -10,6 +10,7 @@ import {
 } from '../types/index.js';
 
 export interface HistoryItem {
+  track?: Track;
   id: string; // timestamp_trackId
   trackId: string;
   playedAt: number;
@@ -221,6 +222,7 @@ export const dbService = {
   async saveDownloadState(download: DownloadState): Promise<void> {
     const db = await getDB();
     await db.put('downloads', download);
+    if (download.status === 'completed') window.dispatchEvent(new CustomEvent('sonora:download-complete', {detail: download.trackId}));
   },
 
   async getDownloadState(trackId: string): Promise<DownloadState | undefined> {
@@ -257,12 +259,16 @@ export const dbService = {
 
   async savePlaylist(playlist: Playlist): Promise<void> {
     const db = await getDB();
+    const previous = await db.get('playlists', playlist.id);
     await db.put('playlists', playlist);
+    window.dispatchEvent(new CustomEvent('sonora:playlist-saved', {detail: {playlist, previous}}));
   },
 
   async mutatePlaylist(id: string, change: (playlist: Playlist) => Playlist): Promise<Playlist | undefined> {
     const db = await getDB(); const tx=db.transaction('playlists','readwrite'); const current=await tx.store.get(id);
-    if(!current){await tx.done;return;} const updated=change(current);await tx.store.put(updated);await tx.done;return updated;
+    if(!current){await tx.done;return;} const updated=change(current);await tx.store.put(updated);await tx.done;
+    window.dispatchEvent(new CustomEvent('sonora:playlist-saved', {detail: {playlist: updated, previous: current}}));
+    return updated;
   },
 
   async deletePlaylist(id: string): Promise<void> {
@@ -294,10 +300,10 @@ export const dbService = {
   },
 
   // History
-  async addHistory(trackId: string): Promise<void> {
+  async addHistory(trackId: string, track?: Track): Promise<void> {
     const db = await getDB();
     const id = `${Date.now()}_${trackId}`;
-    await db.put('history', { id, trackId, playedAt: Date.now() });
+    await db.put('history', { id, trackId, track, playedAt: Date.now() });
     window.dispatchEvent(new Event('sonora:history-changed'));
   },
 
@@ -341,3 +347,9 @@ export const dbService = {
     await db.clear('downloads');
   },
 };
+
+// Notify account sync after committed metadata writes; audio bytes remain device-local.
+for(const method of ['saveTracks','savePlaylist','mutatePlaylist','deletePlaylist','addFavorite','removeFavorite','addHistory','setSetting'] as const){
+ const original=(dbService as any)[method];
+ (dbService as any)[method]=async function(...args:any[]){const result=await original.apply(dbService,args);if(method!=='setSetting'||args[0]==='sonora:account:preferences')window.dispatchEvent(new Event('sonora:library-local-changed'));return result;};
+}

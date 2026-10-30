@@ -1,3 +1,4 @@
+import { rememberSwipePlaylist } from '../lib/swipePlaylist.js';
 import {resumeImports,autoSyncImports} from '../lib/importJobs.js';
 import { audioCache } from '../lib/offline/AudioCache.js';
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -34,8 +35,8 @@ interface AppContextType {
   artists: Artist[];
   playlists: Playlist[];
   favorites: Set<string>;
-  history: { trackId: string; playedAt: number }[];
-  recentHistory: { trackId: string; playedAt: number }[];
+  history: { trackId: string; playedAt: number; track?: Track }[];
+  recentHistory: { trackId: string; playedAt: number; track?: Track }[];
   isLoadingLibrary: boolean;
   libraryError: string | null;
   refreshLibrary: () => Promise<void>;
@@ -108,8 +109,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [artists, setArtists] = useState<Artist[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
-  const [history, setHistory] = useState<{ trackId: string; playedAt: number }[]>([]);
-  const [recentHistory, setRecentHistory] = useState<{ trackId: string; playedAt: number }[]>([]);
+  const [history, setHistory] = useState<{ trackId: string; playedAt: number; track?: Track }[]>([]);
+  const [recentHistory, setRecentHistory] = useState<{ trackId: string; playedAt: number; track?: Track }[]>([]);
 
   const [isLoadingLibrary, setIsLoadingLibrary] = useState<boolean>(true);
   const [libraryError, setLibraryError] = useState<string | null>(null);
@@ -239,7 +240,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setFavorites(new Set(favs));
 
       const hist = await dbService.getPlayHistory(300);
-      setHistory(hist.map((h) => ({ trackId: h.trackId, playedAt: h.playedAt })));
+      setHistory(hist);
       setRecentHistory(await dbService.getRecentHistory(30));
     } catch (err) {
       console.warn('Error loading user data:', err);
@@ -258,6 +259,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     window.addEventListener('sonora:history-changed', update);
     return () => window.removeEventListener('sonora:history-changed', update);
   }, []);
+
+  useEffect(()=>{const refresh=()=>{void refreshLibrary();void loadUserData();};window.addEventListener('sonora:cloud-library-changed',refresh);return()=>window.removeEventListener('sonora:cloud-library-changed',refresh);},[refreshLibrary,loadUserData]);
 
   // React to download completions: newly saved YT tracks join the library
   useEffect(() => {
@@ -418,6 +421,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => { if (isOnline) audioCache.enqueue(tracks); }, [tracks, isOnline]);
 
   useEffect(()=>{const refresh=()=>{void dbService.getAllPlaylists().then(setPlaylists);void dbService.getAllTracks().then(setTracks);};window.addEventListener('sonora:imports-changed',refresh);let cacheTimer: ReturnType<typeof setTimeout> | undefined;const cacheChanged=()=>{if(cacheTimer) return;cacheTimer=setTimeout(()=>{cacheTimer=undefined;setDownloadCounter(n=>n+1);void dbService.getAllTracks().then(setTracks);},500);};window.addEventListener('sonora:cache-changed',cacheChanged);void resumeImports();const timer=setInterval(()=>{if(navigator.onLine){void resumeImports();void autoSyncImports();}},60000);return()=>{window.removeEventListener('sonora:imports-changed',refresh);window.removeEventListener('sonora:cache-changed',cacheChanged);if(cacheTimer)clearTimeout(cacheTimer);clearInterval(timer);};},[]);
+  useEffect(() => {
+    const refresh = () => { void dbService.getAllPlaylists().then(setPlaylists); };
+    window.addEventListener('sonora:playlist-offline-changed', refresh);
+    return () => window.removeEventListener('sonora:playlist-offline-changed', refresh);
+  }, []);
   // Playlist management
   const createPlaylist = useCallback(
     async (
@@ -434,14 +442,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updatedAt: Date.now(),
       };
       await dbService.savePlaylist(newPl);
+      if (initialTrackIds?.length) rememberSwipePlaylist(newPl.id);
       setPlaylists((prev) => [newPl, ...prev]);
       return newPl;
     },
     []
   );
 
+  useEffect(()=>{const refresh=()=>void dbService.getAllPlaylists().then(setPlaylists);window.addEventListener('sonora:playlist-playback-changed',refresh);return()=>window.removeEventListener('sonora:playlist-playback-changed',refresh);},[]);
+
   const updatePlaylist = useCallback(async (id: string, patch: Partial<Playlist>) => {
-    const updated=await dbService.mutatePlaylist(id, latest=>({...latest,...patch,id,updatedAt:Date.now()}));
+    const updated=await dbService.mutatePlaylist(id, latest=>({...latest,...patch,...(patch.playback?{playback:{...latest.playback,...patch.playback}}:{}),id,updatedAt:Date.now()}));
     if(updated)setPlaylists(previous=>previous.map(p=>p.id===id?updated:p));
   }, []);
 
@@ -453,7 +464,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addTrackToPlaylist = useCallback(
     async (playlistId: string, trackId: string) => {
       const updated=await dbService.mutatePlaylist(playlistId, pl=>({...pl,trackIds:[...new Set([...pl.trackIds,trackId])],updatedAt:Date.now()}));
-      if(updated)setPlaylists(previous=>previous.map(p=>p.id===playlistId?updated:p));
+      if(updated){setPlaylists(previous=>previous.map(p=>p.id===playlistId?updated:p));rememberSwipePlaylist(playlistId);}
     },
     [playlists]
   );

@@ -2,7 +2,11 @@ import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
+import './themes.css';
 import { prepareOfflineApp } from './lib/offline/appShell.js';
+
+import { initializeAppearance } from './lib/appearance.js';
+void initializeAppearance();
 
 async function start() {
   // Retire workers installed by older dev builds without deleting the user's

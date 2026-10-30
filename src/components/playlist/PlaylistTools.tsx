@@ -1,13 +1,15 @@
+import { readPlaylistCover } from '../../lib/playlistCover.js';
 import React, { useState } from 'react';
 import { Pin, Pencil, X } from 'lucide-react';
+import { notify } from '../common/ToastHost.js';
 import { Overlay } from '../common/Overlay.js';
 import { useApp } from '../../context/AppContext.js';
 import type { Playlist } from '../../types/index.js';
 export function PlaylistTools({ playlist }: {
     playlist: Playlist;
-}) { const { updatePlaylist } = useApp(); const [open, setOpen] = useState(false); const [title, setTitle] = useState(playlist.title); const [description, setDescription] = useState(playlist.description || ''); const [cover, setCover] = useState(playlist.artworkUrl || ''); const [error, setError] = useState(''); return <><button className="player-icon" aria-label="Edit playlist" title="Edit playlist" onClick={() => { setTitle(playlist.title); setDescription(playlist.description || ''); setCover(playlist.artworkUrl || ''); setOpen(true); }}><Pencil size={18}/></button><button className="player-icon" aria-label={playlist.pinnedAt ? 'Unpin' : 'Pin'} title={playlist.pinnedAt ? 'Unpin' : 'Pin'} onClick={() => void updatePlaylist(playlist.id, { pinnedAt: playlist.pinnedAt ? undefined : Date.now() })}><Pin size={18}/></button>{open && <Overlay isOpen={open} onClose={() => setOpen(false)} label="Edit playlist"><form className="settings-card w-full max-w-lg space-y-4" onSubmit={async (e) => { e.preventDefault(); try {
+}) { const { updatePlaylist } = useApp(); const [open, setOpen] = useState(false); const [title, setTitle] = useState(playlist.title); const [description, setDescription] = useState(playlist.description || ''); const [cover, setCover] = useState(playlist.artworkUrl || ''); const [error, setError] = useState(''); return <><button className="player-icon" aria-label="Edit playlist" title="Edit playlist" onClick={() => { setTitle(playlist.title); setDescription(playlist.description || ''); setCover(playlist.artworkUrl || ''); setOpen(true); }}><Pencil size={18}/></button><button className="player-icon" aria-label={playlist.pinnedAt ? 'Unpin' : 'Pin'} title={playlist.pinnedAt ? 'Unpin' : 'Pin'} aria-pressed={!!playlist.pinnedAt} onClick={() => void updatePlaylist(playlist.id, { pinnedAt: playlist.pinnedAt ? undefined : Date.now() }).then(() => notify(playlist.pinnedAt ? "Playlist unpinned" : "Playlist pinned")).catch(() => notify("Couldn’t update playlist.", true))}><Pin size={18}/></button>{open && <Overlay isOpen={open} onClose={() => setOpen(false)} label="Edit playlist"><form className="settings-card w-full max-w-lg space-y-4" onSubmit={async (e) => { e.preventDefault(); try {
     await updatePlaylist(playlist.id, { title: title.trim(), description: description.trim(), artworkUrl: cover });
-    setOpen(false);
+    setOpen(false); notify("Playlist updated");
 }
 catch (e) {
     setError(String(e));
@@ -15,13 +17,8 @@ catch (e) {
     const file = e.target.files?.[0];
     if (!file)
         return;
-    const bitmap = await createImageBitmap(file);
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = 600;
-    const side = Math.min(bitmap.width, bitmap.height);
-    canvas.getContext('2d')!.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, 600, 600);
-    bitmap.close();
-    setCover(canvas.toDataURL('image/jpeg', .88));
+    const cropped=await readPlaylistCover(file);if(cropped)setCover(cropped);
+    e.target.value = '';
 }
 catch {
     setError('Could not read that image.');

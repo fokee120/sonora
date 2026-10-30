@@ -6,6 +6,25 @@ import type { Track } from '../../types/index.js';
 type CacheMeta = { trackId: string; size: number; cachedAt: number; lastPlayedAt: number };
 const META_KEY = 'auto_audio_metadata_v1';
 class AudioCache {
+    constructor() {
+        window.addEventListener('sonora:download-complete', event => {
+            const id = (event as CustomEvent<string>).detail;
+            void this.removeDownloaded(id).catch(() => {});
+        });
+    }
+    private async removeDownloaded(id: string) {
+        await this.ready;
+        this.jobs.delete(id); this.failed.delete(id);
+        const remove = this.writes.then(async () => {
+            const db = await getDB();
+            if ((await db.get('downloads', id))?.status !== 'completed' || !await dbService.hasAudioBlob(id)) return;
+            await db.delete('autoAudio', id);
+            this.ids.delete(id); this.metadata.delete(id);
+            await this.saveMetadata();
+        });
+        this.writes = remove.catch(() => {});
+        await remove; this.emit();
+    }
     private jobs = new Map<string, {
         track: Track;
         priority: number;
@@ -33,6 +52,9 @@ class AudioCache {
         const existing = new Map((Array.isArray(saved) ? saved : []).filter(item => item && typeof item.trackId === 'string' && Number.isFinite(item.size)).map(item => [item.trackId, item]));
         let changed = existing.size !== keys.length;
         for (const id of keys) {
+            if ((await db.get('downloads', id))?.status === 'completed' && await dbService.hasAudioBlob(id)) {
+                await db.delete('autoAudio', id); changed = true; continue;
+            }
             let meta = existing.get(id);
             if (!meta) {
                 const record = await db.get('autoAudio', id);
@@ -73,15 +95,14 @@ class AudioCache {
     async ensure(track: Track, signal?: AbortSignal): Promise<Blob> {
         await this.ready;
         signal?.throwIfAborted();
-        const existing = await this.get(track.id);
-        if (existing)
-            return existing;
         const download = await (await getDB()).get('downloads', track.id);
         if (download?.status === 'completed') {
             const blob = await dbService.getAudioBlob(track.id);
             if (blob)
                 return blob;
         }
+        const existing = await this.get(track.id);
+        if (existing) return existing;
         const pending = this.active.get(track.id);
         if (pending)
             return pending;
@@ -108,12 +129,24 @@ class AudioCache {
             const blob = new Blob(parts, { type: response.headers.get('Content-Type') || 'audio/mpeg' });
             await validateAudioBlob(blob, track, signal, response);
             signal?.throwIfAborted();
-            const commit = async () => { if (!this.limit || generation !== this.generation || blob.size > this.limit)
-                return; await this.prune(blob.size); const old = await (await getDB()).get('autoAudio', track.id); if (old)
-                return; const meta = { trackId: track.id, size: blob.size, cachedAt: Date.now(), lastPlayedAt: this.playedAt.get(track.id) || 0 }; await (await getDB()).put('autoAudio', { ...meta, bytes: await blob.arrayBuffer(), mimeType: blob.type }); this.ids.add(track.id); this.metadata.set(track.id, meta); await this.saveMetadata(); void cacheArtwork(track); this.emit(); };
+            const commit = async () => {
+                if (!this.limit || generation !== this.generation || blob.size > this.limit) return;
+                const db = await getDB();
+                // A download may finish while the same song is still being fetched
+                // for automatic caching. Recheck at commit, inside the write queue.
+                if ((await db.get('downloads', track.id))?.status === 'completed' && await dbService.hasAudioBlob(track.id)) return;
+                if (await db.get('autoAudio', track.id)) return;
+                await this.prune(blob.size);
+                const meta = {trackId: track.id, size: blob.size, cachedAt: Date.now(), lastPlayedAt: this.playedAt.get(track.id) || 0};
+                await db.put('autoAudio', {...meta, bytes: await blob.arrayBuffer(), mimeType: blob.type});
+                this.ids.add(track.id); this.metadata.set(track.id, meta);
+                await this.saveMetadata(); void cacheArtwork(track); this.emit();
+            };
             const saved = this.writes.then(commit);
             this.writes = saved.catch(() => { });
-            await saved.catch(error=>{this.lastError=error instanceof Error?error.message:'Could not save audio cache';this.emit();});
+            // Playback needs the validated bytes, not the completion of a
+            // potentially busy IndexedDB write queue. Persist independently.
+            void saved.catch(error=>{this.lastError=error instanceof Error?error.message:'Could not save audio cache';this.emit();});
             return blob;
         })().finally(() => { this.active.delete(track.id); this.emit(); });
         this.active.set(track.id, task);
@@ -124,6 +157,10 @@ class AudioCache {
         while (this.jobs.size && this.limit && navigator.onLine) {
             const job = [...this.jobs.values()].sort((a, b) => a.priority - b.priority)[0];
             this.jobs.delete(job.track.id);
+            const download = await dbService.getDownloadState(job.track.id);
+            if (download?.status === 'completed' && await dbService.hasAudioBlob(job.track.id)) {
+                this.failed.delete(job.track.id); continue;
+            }
             this.attempted.add(job.track.id);
             try {
                 if(!this.ids.has(job.track.id))await this.ensure(job.track); this.failed.delete(job.track.id);

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Download, Smartphone, X, CheckCircle2 } from 'lucide-react';
+import { Overlay } from './Overlay.js';
 import { usePWAInstall } from '../../hooks/usePWAInstall.js';
 
 export const PWAInstallButton: React.FC<{ variant?: 'sidebar' | 'banner' | 'compact' }> = ({
@@ -55,15 +56,15 @@ export const PWAInstallButton: React.FC<{ variant?: 'sidebar' | 'banner' | 'comp
 
       {/* iOS Safari Installation Guide Modal */}
       {showIOSGuide && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4">
-          <div className="w-full max-w-sm rounded-2xl bg-zinc-900 border border-zinc-800 p-6 shadow-2xl text-zinc-100">
+        <Overlay isOpen onClose={() => setShowIOSGuide(false)} label="Install on iPhone or iPad">
+          <div className="p-6 text-zinc-100">
             <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
               <div className="flex items-center gap-2.5">
                 <Smartphone className="w-5 h-5 text-indigo-400" />
                 <h3 className="text-base font-semibold">Install on iPhone / iPad</h3>
               </div>
               <button
-                onClick={() => setShowIOSGuide(false)}
+                onClick={() => setShowIOSGuide(false)} aria-label="Close installation guide"
                 className="p-1 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200"
               >
                 <X className="w-4 h-4" />
@@ -106,7 +107,7 @@ export const PWAInstallButton: React.FC<{ variant?: 'sidebar' | 'banner' | 'comp
               Got it
             </button>
           </div>
-        </div>
+        </Overlay>
       )}
 
       {installedNotice && (

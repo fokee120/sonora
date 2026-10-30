@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import {setTimeout as wait} from 'node:timers/promises';
 
 import { access, mkdir, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -6,6 +7,7 @@ import { finalizeFile, type DownloadArtifact } from './DownloadArtifact.js';
 import type { CaptureProgress } from './DownloadJobs.js';
 
 const LIMIT = 256 * 1024 * 1024;
+export function canRefreshDirectSource(error:unknown){const message=error instanceof Error?error.message:'';return !/sign in|private video|members.only|not available in your country|age.restricted|confirm.+bot/i.test(message)&&/unable to download video data:[^\r\n]*HTTP Error (?:403|410)/i.test(message);}
 interface Command { executable: string; args: string[] }
 export class DirectDownloader {
   constructor(private readonly command?: Command) {}
@@ -32,9 +34,9 @@ export class DirectDownloader {
     let downloadedBytes = 0, totalBytes = 0, retained = false;
     try {
       report('preparing');
-      await new Promise<void>((resolveProcess, reject) => {
+      const extract = (attempt:number) => new Promise<void>((resolveProcess, reject) => {
         combined.throwIfAborted();
-        const child = spawn(command!.executable, [...command!.args, '--ignore-config', '--no-playlist', '--js-runtimes', `node:${process.execPath}`, '--socket-timeout', '12', '--retries', '1', '--extractor-retries', '1', '--newline', '--progress', '--progress-template', 'download:SONORA_PROGRESS:%(progress)j', '--write-info-json', '--no-clean-info-json', '--max-filesize', String(LIMIT), '-f', 'bestaudio[acodec=opus]/bestaudio[ext=webm]/bestaudio', '-o', join(directory, 'source.%(ext)s'), `https://music.youtube.com/watch?v=${videoId}`], { windowsHide: true, shell: false });
+        const child = spawn(command!.executable, [...command!.args, ...(attempt>0?['--no-cache-dir','--no-continue']:[]), '--ignore-config', '--no-playlist', '--js-runtimes', `node:${process.execPath}`, '--socket-timeout', '12', '--retries', '1', '--extractor-retries', '1', '--newline', '--progress', '--progress-template', 'download:SONORA_PROGRESS:%(progress)j', '--write-info-json', '--no-clean-info-json', '--max-filesize', String(LIMIT), '-f', 'bestaudio[acodec=opus]/bestaudio[ext=webm]/bestaudio', '-o', join(directory, 'source.%(ext)s'), `https://www.youtube.com/watch?v=${videoId}`], { windowsHide: true, shell: false });
         let pending = '', diagnostics = '', failure: Error | undefined, checking = false;
         const kill = () => {
           if (!child.pid) return;
@@ -76,6 +78,18 @@ export class DirectDownloader {
         child.once('close', code => { cleanup(); if (failure || combined.aborted) reject(failure ?? combined.reason); else if (code !== 0) reject(new Error(`Direct download failed (${code}): ${diagnostics}`)); else resolveProcess(); });
         if (combined.aborted) abort();
       });
+      for(let attempt=0;attempt<3;attempt++){
+        try{await extract(attempt);break;}
+        catch(error){
+          combined.throwIfAborted();
+          if(attempt===2||!canRefreshDirectSource(error))throw error;
+          // Re-extract the same public source instead of retrying its rejected
+          // media URL. Never reuse partial bytes or metadata from that attempt.
+          for(const name of await readdir(directory))await rm(join(directory,name),{force:true});
+          downloadedBytes=0;totalBytes=0;report('preparing');
+          await wait(750*(attempt+1),undefined,{signal:combined});
+        }
+      }
       combined.throwIfAborted();
       const metadataPath = join(directory, 'source.info.json');
       if ((await stat(metadataPath)).size > 8 * 1024 * 1024) throw new Error('Download metadata exceeds limit');

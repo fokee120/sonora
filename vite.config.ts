@@ -16,11 +16,11 @@ export default defineConfig(() => {
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
         manifest: {
           id: '/',
-          name: 'Personal Music Player',
-          short_name: 'MusicPlayer',
+          name: 'Sonora',
+          short_name: 'Sonora',
           description: 'Music discovery, playlists, and offline listening with Sonora',
-          theme_color: '#09090b',
-          background_color: '#09090b',
+          theme_color: '#101312',
+          background_color: '#101312',
           display: 'standalone',
           start_url: '/',
           scope: '/',
@@ -48,7 +48,7 @@ export default defineConfig(() => {
         workbox: {
           clientsClaim: true,
           skipWaiting: true,
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,ttf,woff,woff2}'],
           cleanupOutdatedCaches: true,
           navigateFallback: '/index.html',
           navigateFallbackDenylist: [/^\/api/],
@@ -84,6 +84,16 @@ export default defineConfig(() => {
         },
       }),
     ],
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'react-vendor': ['react', 'react-dom', 'react-dom/client'],
+            'motion-vendor': ['motion/react'],
+          },
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

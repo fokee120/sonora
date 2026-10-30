@@ -1,3 +1,5 @@
+import {isRoutineAudioCancellation} from '../bridge/AudioCancellation.js';
+import {searchYoutubeVideos} from './youtubeSearch.js';
 import express from 'express';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
@@ -82,6 +84,13 @@ app.post('/api/ytmusic/audio-backend-test', async (req, res) => {
   }
 });
 
+// Ordinary YouTube uploads, separate from the music catalog.
+app.get('/api/youtube/search', async (req,res)=>{
+ const query=String(req.query.q||'').trim();
+ if(!query||query.length>200)return res.status(400).json({error:'Enter a search of up to 200 characters.'});
+ try{res.json({songs:await searchYoutubeVideos(query)});}catch{res.status(502).json({error:'YouTube search is unavailable. Please try again.'});}
+});
+
 // Search the YouTube Music catalog
 app.get('/api/ytmusic/search', async (req, res) => {
   const startedAt = Date.now();
@@ -106,6 +115,22 @@ app.get('/api/ytmusic/search', async (req, res) => {
       details: err?.message || String(err),
     });
   }
+});
+
+
+// Artist profiles and album track lists, separate from the user's saved library.
+app.get('/api/ytmusic/browse/:browseId', async (req,res)=>{
+  const id=req.params.browseId,continuation=typeof req.query.continuation==='string'?req.query.continuation:undefined;
+  if(!/^(UC|MPRE|VL|FEmusic)[A-Za-z0-9_-]{1,156}$/.test(id)||(continuation&&(!/^[A-Za-z0-9_=%-]+$/.test(continuation)||continuation.length>4096)))return res.status(400).json({error:'Invalid catalog page'});
+  try{res.json(await youtubeMusicClient.browse(id,continuation));}catch(error){res.status(502).json({error:'Could not load this catalog page',details:error instanceof Error?error.message:String(error)});}
+});
+
+// Song-seeded YouTube Music radio; independent of all playback/bridge sessions.
+app.get('/api/ytmusic/radio/:videoId', async (req,res)=>{
+  const {videoId}=req.params;
+  if(!VALID_YT_VIDEO_ID.test(videoId))return res.status(400).json({error:'Invalid YouTube video ID'});
+  try{res.json({source:'youtube-music-radio',songs:await youtubeMusicClient.radio(videoId)});}
+  catch{res.status(502).json({error:'YouTube Music radio is unavailable for this song'});}
 });
 
 // Single track metadata
@@ -215,14 +240,19 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
   const controller = new AbortController();
   let jobId: string | undefined;
   let downloadAdmitted = false;
+  let clientDisconnected=false,timedOut=false;
   const cancel = () => {
     if (!res.writableFinished) {
+      clientDisconnected=true;
       controller.abort();
       if (jobId) updateDownloadJob(jobId, 'cancelled');
     }
   };
   res.on('close', cancel);
-  const timeout = setTimeout(cancel, 600000); // 10 min max (long songs + capture overhead)
+  const timeout = setTimeout(()=>{
+    timedOut=true;
+    controller.abort(Object.assign(new Error('Audio request exceeded the 10 minute timeout'),{code:'AUDIO_TIMEOUT',status:504}));
+  },600000);
   const isDownload = req.path.includes('/download/');
   try {
     const { videoId } = req.params;
@@ -301,7 +331,7 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
     const first = await audio.next();
     if (first.done || !first.value?.length) {
       await audio.return(undefined);
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) throw controller.signal.reason;
       throw new Error('Chromium returned an empty audio stream');
     }
     async function* chunks() {
@@ -317,18 +347,24 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
     logServerPerf('chromium bridge first byte', startedAt, { videoId, isDownload, format, sessionId, start });
     await pipeline(Readable.from(chunks(), { highWaterMark: 1 }), res);
   } catch (err: any) {
-    if (jobId) updateDownloadJob(jobId, controller.signal.aborted ? 'cancelled' : 'failed');
-    console.error('YT Music bridge error:', err);
-    if (!res.headersSent) {
+    const failure=timedOut?controller.signal.reason:err;
+    const routine=isRoutineAudioCancellation(failure,clientDisconnected,timedOut);
+    if (jobId) updateDownloadJob(jobId, routine ? 'cancelled' : 'failed');
+    if(routine){
+      if(!res.destroyed){if(res.headersSent)res.destroy();else res.status(409).json({error:'audio_cancelled',details:'Playback request was cancelled.'});}
+      return;
+    }
+    console.error('YT Music bridge error:', failure);
+    if (!res.headersSent && !res.destroyed) {
       res.removeHeader('Content-Disposition');
       res.removeHeader('X-Audio-Format');
       res.removeHeader('X-Audio-Complete');
       res.removeHeader('X-Audio-Duration');
       res.removeHeader('Content-Length');
       res.type('application/json');
-      res.status(err?.status || 502).json({
-        error: err?.code || (isDownload ? 'direct_download_failed' : 'chromium_bridge_failed'),
-        details: err?.message,
+      res.status(failure?.status || 502).json({
+        error: failure?.code || (isDownload ? 'direct_download_failed' : 'chromium_bridge_failed'),
+        details: failure?.message,
       });
     }
   } finally {
