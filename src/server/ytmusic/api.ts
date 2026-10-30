@@ -322,6 +322,7 @@ app.get(['/api/ytmusic/stream/:videoId', '/api/ytmusic/download/:videoId'], asyn
         await pipeline(createReadStream(artifact.path), res, { signal: controller.signal });
         } finally { releaseTransfer(); }
       } finally { await artifact.dispose(); }
+      if(jobId)updateDownloadJob(jobId,'completed');
       return;
     }
 
