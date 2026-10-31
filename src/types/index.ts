@@ -1,6 +1,8 @@
 export type TrackSource = 'gdrive' | 'ytmusic';
 
 export interface Track {
+  artistId?: string;
+  albumId?: string;
   id: string;
   title: string;
   artist: string;
@@ -24,6 +26,7 @@ export interface Track {
 }
 
 export interface Album {
+  artistId?: string;
   id: string;
   title: string;
   artist: string;
@@ -43,7 +46,24 @@ export interface Artist {
   albumCount: number;
 }
 
+export interface EstimatedMatch {
+  title: string;
+  artist: string;
+  artworkUrl?: string;
+  trackId: string;
+  added: boolean;
+}
+
+export type PlaylistSort = 'custom'|'date-new'|'date-old'|'artist'|'album'|'title';
 export interface Playlist {
+  customOrder?:string[];
+  savedFrom?:{profileId:string;playlistId:string};
+  playback?: {shuffle?:boolean;sort?:PlaylistSort};
+  keepDownloaded?: boolean;
+  estimatedMatches?: EstimatedMatch[];
+  pinnedAt?: number;
+  lastPlayedAt?: number;
+  source?: { type: 'ytmusic' | 'youtube' | 'spotify' | 'file'; id: string; syncedAt?: number };
   id: string;
   title: string;
   description?: string;
@@ -59,7 +79,7 @@ export interface DownloadState {
   trackId: string;
   status: DownloadStatus;
   progress: number; // 0 - 100
-  phase?: 'preparing' | 'recording' | 'fetching' | 'finalizing' | 'transferring' | 'validating';
+  phase?: 'preparing' | 'recording' | 'fetching' | 'finalizing' | 'waiting_transfer' | 'transferring' | 'validating';
   sourceBytesDownloaded?: number;
   sourceTotalBytes?: number;
   recordedSeconds?: number;
@@ -80,19 +100,29 @@ export interface AudioBlobRecord {
 
 export interface ArtworkRecord {
   id: string; // url or trackId
-  blob: Blob;
+  blob?: Blob;
+  bytes?: ArrayBuffer;
+  sourceUrl?: string;
   mimeType: string;
   cachedAt: number;
 }
 
+export interface QueueSource {playlistId:string;tracks:Track[];shuffle:boolean;}
 export interface QueueItem {
+  queueSource?:QueueSource;
+  originPlaylistId?:string;
+  originShuffle?:boolean;
   track: Track;
   queueId: string;
+  manual?: boolean;
+  contextIndex?: number;
 }
 
 export type RepeatMode = 'off' | 'all' | 'one';
 
 export interface PlayerState {
+  playlistProfileId?:string|null;
+  playlistId?: string | null;
   currentTrack: Track | null;
   isPlaying: boolean;
   playbackSource: 'cloud' | 'local';
@@ -104,6 +134,7 @@ export interface PlayerState {
   duration: number;
   bufferedTime: number;
   isLoading: boolean;
+  isPreview?: boolean;
   error?: string | null;
 }
 
@@ -121,13 +152,16 @@ export interface StorageQuotaInfo {
 export type ViewRoute =
   | { type: 'home' }
   | { type: 'search'; query?: string }
+  | { type: 'recap' }
   | { type: 'library' }
   | { type: 'artists' }
-  | { type: 'artist'; id: string }
+  | { type: 'artist'; id: string; name?: string }
   | { type: 'albums' }
-  | { type: 'album'; id: string }
+  | { type: 'album'; id: string; artistId?: string; title?: string; artist?: string }
   | { type: 'playlists' }
-  | { type: 'playlist'; id: string }
+  | { type: 'playlist'; id: string; profileId?: string }
   | { type: 'liked' }
   | { type: 'downloads' }
+  | { type: 'profile'; id?: string }
+  | { type: 'profile-listening'; id: string; section: 'recap'|'history' }
   | { type: 'settings' };

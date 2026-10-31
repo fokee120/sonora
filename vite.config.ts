@@ -11,14 +11,16 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
+        // Register from the app so users can see when offline installation is ready.
+        injectRegister: false,
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
         manifest: {
           id: '/',
-          name: 'Personal Music Player',
-          short_name: 'MusicPlayer',
-          description: 'Personal music streaming player with offline audio playback and Cloudflare R2 storage',
-          theme_color: '#09090b',
-          background_color: '#09090b',
+          name: 'Sonora',
+          short_name: 'Sonora',
+          description: 'Music discovery, playlists, and offline listening with Sonora',
+          theme_color: '#101312',
+          background_color: '#101312',
           display: 'standalone',
           start_url: '/',
           scope: '/',
@@ -44,7 +46,9 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          clientsClaim: true,
+          skipWaiting: true,
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,ttf,woff,woff2}'],
           cleanupOutdatedCaches: true,
           navigateFallback: '/index.html',
           navigateFallbackDenylist: [/^\/api/],
@@ -80,6 +84,16 @@ export default defineConfig(() => {
         },
       }),
     ],
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'react-vendor': ['react', 'react-dom', 'react-dom/client'],
+            'motion-vendor': ['motion/react'],
+          },
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

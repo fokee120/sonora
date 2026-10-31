@@ -1,233 +1,38 @@
-import React, { useState } from 'react';
-import {
-  HardDriveDownload,
-  Trash2,
-  ShieldCheck,
-  Play,
-  Shuffle,
-  AlertTriangle,
-  RefreshCw,
-  Database,
-  Smartphone,
-} from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Download, Trash2, ShieldCheck, Play, Shuffle, RefreshCw, X } from 'lucide-react';
 import { useApp } from '../context/AppContext.js';
 import { usePlayer } from '../hooks/usePlayer.js';
 import { TrackRow } from '../components/common/TrackRow.js';
+import { Overlay } from '../components/common/Overlay.js';
+import { notify } from '../components/common/ToastHost.js';
 import { offlineManager } from '../lib/offline/OfflineManager.js';
-
+import { OfflineReadiness } from '../components/common/OfflineReadiness.js';
 export const DownloadsView: React.FC = () => {
-  const {
-    tracks,
-    storageInfo,
-    refreshStorageInfo,
-    clearAllDownloads,
-    requestPersistStorage,
-  } = useApp();
-
+  const { tracks, storageInfo, refreshStorageInfo, clearAllDownloads, requestPersistStorage } = useApp();
   const { playTrack, setQueue } = usePlayer();
-  const [showConfirmClear, setShowConfirmClear] = useState(false);
-  const [isPersisting, setIsPersisting] = useState(false);
-
-  // Filter downloaded tracks
-  const downloadedIds = offlineManager.getAllDownloadedTrackIds();
-  const downloadedTracks = tracks.filter((t) => downloadedIds.has(t.id));
-
-  const handlePlayAll = (shuffle = false) => {
-    if (downloadedTracks.length === 0) return;
-    setQueue(downloadedTracks, downloadedTracks[0]);
-    playTrack(downloadedTracks[0], downloadedTracks);
+  const [showClear, setShowClear] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [, setRevision] = useState(0);
+  useEffect(() => offlineManager.subscribe(() => setRevision(n => n + 1)), []);
+  const downloaded = tracks.filter(t => offlineManager.isTrackDownloaded(t.id));
+  const pending = tracks.filter(t => offlineManager.isTrackDownloading(t.id) || offlineManager.getDownloadState(t.id)?.status === 'failed');
+  const play = (shuffle = false) => {
+    if (!downloaded.length) return;
+    const queue = [...downloaded];
+    if (shuffle) for (let i = queue.length-1; i > 0; i--) { const j = Math.floor(Math.random() * (i+1)); [queue[i],queue[j]] = [queue[j],queue[i]]; }
+    setQueue(queue, queue[0]); playTrack(queue[0], queue);
   };
-
-  const handleRequestPersist = async () => {
-    setIsPersisting(true);
-    await requestPersistStorage();
-    setIsPersisting(false);
-  };
-
-  const handleClear = async () => {
-    await clearAllDownloads();
-    setShowConfirmClear(false);
-  };
-
-  return (
-    <div id="downloads-view" className="space-y-8 pb-12">
-      {/* Header & Storage Gauge Card */}
-      <div className="p-6 sm:p-8 rounded-3xl bg-zinc-900/60 border border-zinc-800/80 shadow-xl space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
-              <HardDriveDownload className="w-6 h-6" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight text-white">Offline Downloads</h1>
-              <p className="text-xs text-zinc-400">
-                IndexedDB Binary Audio Storage & Safari PWA Cache
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => refreshStorageInfo()}
-              className="p-2 text-zinc-400 hover:text-white rounded-xl bg-zinc-800 hover:bg-zinc-700 transition"
-              title="Refresh quota estimate"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
-            {downloadedTracks.length > 0 && (
-              <button
-                onClick={() => setShowConfirmClear(true)}
-                className="px-3 py-2 text-xs font-medium text-rose-400 hover:text-white hover:bg-rose-950/60 border border-rose-900/40 rounded-xl transition flex items-center gap-1.5"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Clear All</span>
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Quota Meter */}
-        {storageInfo && (
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
-            <div className="p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 space-y-1">
-              <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
-                Downloaded Songs
-              </span>
-              <p className="text-2xl font-bold font-mono text-emerald-400">
-                {storageInfo.trackCount}
-              </p>
-              <p className="text-[11px] text-zinc-500">Stored in IndexedDB Audio Store</p>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 space-y-1">
-              <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
-                Storage Used
-              </span>
-              <p className="text-2xl font-bold font-mono text-indigo-400">
-                {storageInfo.downloadSizeMB} MB
-              </p>
-              <p className="text-[11px] text-zinc-500">
-                of ~{storageInfo.quotaMB > 1024 ? `${(storageInfo.quotaMB / 1024).toFixed(1)} GB` : `${storageInfo.quotaMB} MB`} browser quota
-              </p>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/80 space-y-2 flex flex-col justify-between">
-              <div>
-                <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
-                  Persistent Storage
-                </span>
-                <div className="flex items-center gap-1.5 mt-1">
-                  <ShieldCheck
-                    className={`w-4 h-4 ${
-                      storageInfo.isPersisted ? 'text-emerald-400' : 'text-amber-400'
-                    }`}
-                  />
-                  <span
-                    className={`text-xs font-semibold ${
-                      storageInfo.isPersisted ? 'text-emerald-300' : 'text-amber-300'
-                    }`}
-                  >
-                    {storageInfo.isPersisted ? 'Storage Protected' : 'Not Persisted'}
-                  </span>
-                </div>
-              </div>
-
-              {!storageInfo.isPersisted && (
-                <button
-                  onClick={handleRequestPersist}
-                  disabled={isPersisting}
-                  className="w-full px-2.5 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600 text-indigo-200 hover:text-white border border-indigo-500/40 text-[11px] font-medium transition"
-                >
-                  {isPersisting ? 'Requesting...' : 'Request Protection'}
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Safari & iOS PWA Notes */}
-        <div className="p-3.5 rounded-2xl bg-zinc-950/40 border border-zinc-800/50 text-xs text-zinc-400 flex items-start gap-3">
-          <Smartphone className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
-          <p className="leading-relaxed">
-            <strong>iOS & Safari PWA Optimization:</strong> Stored directly as raw binary blobs in IndexedDB. When added to your Home Screen as a standalone PWA, iOS grants persistent offline storage without Safari cache purge cycles.
-          </p>
-        </div>
-
-        {/* Playback Actions */}
-        {downloadedTracks.length > 0 && (
-          <div className="flex items-center gap-3 pt-2">
-            <button
-              onClick={() => handlePlayAll(false)}
-              className="px-5 py-2.5 rounded-xl bg-white text-zinc-950 hover:bg-zinc-200 font-semibold text-xs flex items-center gap-2 transition shadow-lg"
-            >
-              <Play className="w-4 h-4 fill-current ml-0.5" />
-              <span>Play All Downloaded</span>
-            </button>
-            <button
-              onClick={() => handlePlayAll(true)}
-              className="px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium text-xs flex items-center gap-2 border border-zinc-700 transition"
-            >
-              <Shuffle className="w-4 h-4" />
-              <span>Shuffle</span>
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Downloaded Track List */}
-      <div className="space-y-3">
-        <h2 className="text-base font-bold text-white tracking-tight">Downloaded Tracks</h2>
-
-        <div className="divide-y divide-zinc-900/60 rounded-2xl bg-zinc-900/20 border border-zinc-800/50 p-1">
-          {downloadedTracks.length === 0 ? (
-            <div className="py-20 text-center text-zinc-500 text-xs">
-              <HardDriveDownload className="w-8 h-8 mx-auto mb-2 opacity-30 text-zinc-400" />
-              <p>No tracks downloaded for offline playback yet.</p>
-              <p className="text-zinc-600 mt-1">
-                Click the download icon on any song, album, or playlist to save it locally.
-              </p>
-            </div>
-          ) : (
-            downloadedTracks.map((track, idx) => (
-              <TrackRow
-                key={`downloaded-${track.id}`}
-                track={track}
-                index={idx}
-                tracksContext={downloadedTracks}
-              />
-            ))
-          )}
-        </div>
-      </div>
-
-      {/* Confirm Clear Modal */}
-      {showConfirmClear && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4">
-          <div className="w-full max-w-sm rounded-2xl bg-zinc-950 border border-zinc-800 p-6 shadow-2xl text-zinc-100">
-            <div className="flex items-center gap-3 text-rose-400 mb-3">
-              <AlertTriangle className="w-5 h-5" />
-              <h3 className="text-base font-semibold">Clear All Downloads?</h3>
-            </div>
-            <p className="text-xs text-zinc-400 leading-relaxed">
-              This will remove all {downloadedTracks.length} cached audio blobs from IndexedDB. You can re-download them whenever you are connected to the internet.
-            </p>
-            <div className="flex items-center justify-end gap-3 mt-6">
-              <button
-                onClick={() => setShowConfirmClear(false)}
-                className="px-3.5 py-2 text-xs font-medium text-zinc-400 hover:text-white rounded-xl hover:bg-zinc-900"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleClear}
-                className="px-4 py-2 text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white rounded-xl shadow-lg transition"
-              >
-                Clear Downloads
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+  return <div id="downloads-view" className="section-stack">
+    <OfflineReadiness/>
+    <section className="settings-card download-summary"><div className="section-heading"><div><p className="eyebrow">TAKE IT WITH YOU</p><h1 className="text-2xl font-semibold tracking-tight mt-2">Downloaded songs</h1><p>Saved on this device</p></div><button className="player-icon" title="Refresh quota estimate" aria-label="Refresh quota estimate" onClick={() => void refreshStorageInfo()}><RefreshCw size={19}/></button></div>
+      <div className="download-stats"><div><strong>{downloaded.length}</strong><span>Songs offline</span></div><div><strong>{storageInfo?.downloadSizeMB || 0}<small> MB</small></strong><span>On this device</span></div></div>
+      {storageInfo && <><div className="storage-meter" role="meter" aria-label="Device storage used" aria-valuenow={Math.round(storageInfo.percentUsed)} aria-valuemin={0} aria-valuemax={100}><span style={{ width: Math.min(100, storageInfo.percentUsed) + '%' }}/></div><p>{storageInfo.usageMB} MB used of {storageInfo.quotaMB > 1024 ? (storageInfo.quotaMB/1024).toFixed(1) + ' GB' : storageInfo.quotaMB + ' MB'} available to Sonora</p><div className="storage-protection"><ShieldCheck size={19}/><span>{storageInfo.persisted ? 'Storage protected' : 'Keep your downloads safer'}</span>{!storageInfo.persisted && <button className="text-button" disabled={busy} onClick={async () => { setBusy(true); try { const accepted = await requestPersistStorage(); notify(accepted ? 'Download storage protected' : 'This browser manages storage automatically'); } catch { notify('Couldn’t request storage protection.', true); } finally { setBusy(false); } }}>{busy ? 'Requesting…' : 'Protect storage'}</button>}</div></>}
+      {!!downloaded.length && <div className="flex flex-wrap gap-3"><button className="primary-button" onClick={() => play()}><Play size={16} fill="currentColor"/>Play all</button><button className="action-button" onClick={() => play(true)}><Shuffle size={16}/>Shuffle</button></div>}
+    </section>
+    {pending.length > 0 && <section className="section-stack"><div className="section-heading"><h2>Downloads in progress</h2><button className="text-button" onClick={() => { pending.forEach(t => offlineManager.cancelDownload(t.id)); notify('Pending downloads cancelled'); }}>Cancel pending</button></div><div className="song-list">{pending.map((track, index) => <TrackRow key={track.id} track={track} index={index} tracksContext={downloaded}/>)}</div></section>}
+    <section className="section-stack"><div className="section-heading"><h2>On your device</h2>{!!downloaded.length && <button className="text-button text-rose-300" onClick={() => { setError(''); setShowClear(true); }}><Trash2 size={15}/>Clear all</button>}</div>{!downloaded.length ? <div className="empty-state"><span className="empty-icon"><Download size={28}/></span><h2>Good music goes with you.</h2><p>Tap the download icon on a song or playlist. Your music will be ready without a connection.</p></div> : <div className="song-list">{downloaded.map((track, index) => <TrackRow key={track.id} track={track} index={index} tracksContext={downloaded}/>)}</div>}</section>
+    <p className="download-footnote">On iPhone, download inside the installed Home Screen app. iOS can remove website data when device storage is low.</p>
+    <Overlay isOpen={showClear} onClose={() => !busy && setShowClear(false)} label="Clear All Downloads?"><div className="p-6 section-stack"><header className="section-heading"><h2>Clear All Downloads?</h2><button className="player-icon" aria-label="Close confirmation" onClick={() => setShowClear(false)} disabled={busy}><X size={20}/></button></header><p className="text-sm text-zinc-400">Remove {downloaded.length} audio files from this device? Your library and playlists stay saved. You can download these songs again.</p>{error && <p role="alert">{error}</p>}<div className="flex gap-3 justify-end"><button className="action-button" disabled={busy} onClick={() => setShowClear(false)}>Cancel</button><button className="action-button text-rose-300" disabled={busy} onClick={async () => { setBusy(true); try { await clearAllDownloads(); setShowClear(false); notify('Downloads cleared'); } catch { setError('Couldn’t clear downloads. Please try again.'); } finally { setBusy(false); } }}>{busy ? 'Clearing…' : 'Clear Downloads'}</button></div></div></Overlay>
+  </div>;
 };

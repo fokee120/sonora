@@ -1,211 +1,43 @@
 import React, { useState } from 'react';
-import { Music, Disc3, User, ListMusic, Play, Shuffle, Plus, RefreshCw, HardDrive } from 'lucide-react';
+import {usePlayer} from '../hooks/usePlayer.js';
+import {sortPlaylistTracks} from '../lib/playlistOrder.js';
+import {notify} from '../components/common/ToastHost.js';
+import { Play, Pause, Shuffle, Loader2, Plus, ListMusic, Heart, Pin, ArrowDownToLine, Search, ArrowDownUp } from 'lucide-react';
 import { useApp } from '../context/AppContext.js';
-import { usePlayer } from '../hooks/usePlayer.js';
 import { TrackRow } from '../components/common/TrackRow.js';
-
-type TabType = 'songs' | 'albums' | 'artists' | 'playlists';
-
+import { ImportPlaylistModal } from '../components/playlist/ImportPlaylistModal.js';
+import { PlaylistCover } from '../components/common/PlaylistCover.js';
 export const LibraryView: React.FC = () => {
-  const {
-    displayTracks,
-    displayAlbums,
-    displayArtists,
-    displayPlaylists,
-    navigate,
-    openCreatePlaylist,
-    isDriveConnected,
-    scanGoogleDrive,
-    isScanningDrive,
-  } = useApp();
-  const { playTrack, setQueue } = usePlayer();
-  const [activeTab, setActiveTab] = useState<TabType>('songs');
-
-  const handlePlayAllSongs = (shuffle = false) => {
-    if (displayTracks.length === 0) return;
-    setQueue(displayTracks, displayTracks[0]);
-    playTrack(displayTracks[0], displayTracks);
-  };
-
-  return (
-    <div id="library-view" className="space-y-6 pb-12">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">Your Library</h1>
-          <p className="text-xs text-zinc-400 mt-0.5">
-            {displayTracks.length} tracks • {displayAlbums.length} albums • {displayArtists.length} artists
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {isDriveConnected && (
-            <button
-              onClick={() => scanGoogleDrive()}
-              disabled={isScanningDrive}
-              className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-300 border border-white/10 font-medium text-xs flex items-center gap-1.5 transition"
-              title="Rescan Google Drive for new MP3 audio files"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 text-indigo-400 ${isScanningDrive ? 'animate-spin' : ''}`} />
-              <span>{isScanningDrive ? 'Scanning...' : 'Sync Drive'}</span>
-            </button>
-          )}
-
-          {activeTab === 'playlists' && (
-            <button
-              onClick={() => openCreatePlaylist()}
-              className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs flex items-center gap-1.5 transition shadow-lg shadow-indigo-900/30"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>New Playlist</span>
-            </button>
-          )}
-
-          {activeTab === 'songs' && displayTracks.length > 0 && (
-            <>
-              <button
-                onClick={() => handlePlayAllSongs(false)}
-                className="px-3.5 py-1.5 rounded-xl bg-white text-zinc-950 hover:bg-zinc-200 font-semibold text-xs flex items-center gap-1.5 transition"
-              >
-                <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
-                <span>Play All</span>
-              </button>
-              <button
-                onClick={() => handlePlayAllSongs(true)}
-                className="px-3 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-800 font-medium text-xs flex items-center gap-1.5 transition"
-              >
-                <Shuffle className="w-3.5 h-3.5" />
-                <span>Shuffle</span>
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex items-center gap-2 border-b border-zinc-800 pb-2">
-        {(
-          [
-            { id: 'songs', label: 'Songs', icon: Music, count: displayTracks.length },
-            { id: 'albums', label: 'Albums', icon: Disc3, count: displayAlbums.length },
-            { id: 'artists', label: 'Artists', icon: User, count: displayArtists.length },
-            { id: 'playlists', label: 'Playlists', icon: ListMusic, count: displayPlaylists.length },
-          ] as const
-        ).map((tab) => {
-          const Icon = tab.icon;
-          const isActive = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-medium transition ${
-                isActive
-                  ? 'bg-zinc-800 text-white shadow-xs font-semibold'
-                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
-              }`}
-            >
-              <Icon className="w-3.5 h-3.5" />
-              <span>{tab.label}</span>
-              <span className="text-[10px] text-zinc-500 font-mono">({tab.count})</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Tab Content */}
-      {activeTab === 'songs' && (
-        <div className="divide-y divide-zinc-900/60 rounded-2xl bg-zinc-900/20 border border-zinc-800/50 p-1">
-          {displayTracks.length === 0 ? (
-            <div className="py-16 text-center text-zinc-500 text-xs">No songs in library.</div>
-          ) : (
-            displayTracks.map((track, idx) => (
-              <TrackRow
-                key={`lib-track-${track.id}`}
-                track={track}
-                index={idx}
-                tracksContext={displayTracks}
-              />
-            ))
-          )}
-        </div>
-      )}
-
-      {activeTab === 'albums' && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-          {displayAlbums.map((album) => (
-            <div
-              key={album.id}
-              onClick={() => navigate({ type: 'album', id: album.id })}
-              className="p-3 rounded-2xl bg-zinc-900/40 hover:bg-zinc-800/60 border border-zinc-800/60 hover:border-zinc-700 transition cursor-pointer flex flex-col"
-            >
-              <img
-                src={album.artworkUrl || '/icon.svg'}
-                alt={album.title}
-                className="w-full aspect-square object-cover rounded-xl bg-zinc-950 mb-3 shadow-md"
-              />
-              <p className="text-xs font-semibold text-zinc-200 truncate">{album.title}</p>
-              <p className="text-[11px] text-zinc-400 truncate mt-0.5">{album.artist}</p>
-              <span className="text-[10px] text-zinc-500 mt-1 font-mono">
-                {album.trackCount} tracks
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {activeTab === 'artists' && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-4">
-          {displayArtists.map((artist) => (
-            <div
-              key={artist.id}
-              onClick={() => navigate({ type: 'artist', id: artist.id })}
-              className="p-3 rounded-2xl bg-zinc-900/40 hover:bg-zinc-800/60 border border-zinc-800/60 hover:border-zinc-700 transition cursor-pointer flex flex-col items-center text-center"
-            >
-              <img
-                src={artist.artworkUrl || '/icon.svg'}
-                alt={artist.name}
-                className="w-24 h-24 rounded-full object-cover bg-zinc-950 mb-3 border border-zinc-800"
-              />
-              <p className="text-xs font-semibold text-zinc-200 truncate w-full">{artist.name}</p>
-              <p className="text-[11px] text-zinc-500 font-mono mt-0.5">
-                {artist.trackCount} tracks
-              </p>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {activeTab === 'playlists' && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-          {/* Create New Playlist Card */}
-          <div
-            onClick={() => openCreatePlaylist()}
-            className="p-4 rounded-2xl bg-indigo-950/20 hover:bg-indigo-900/30 border border-indigo-800/40 hover:border-indigo-600/60 transition cursor-pointer flex flex-col items-center justify-center text-center group min-h-[160px]"
-          >
-            <div className="w-12 h-12 rounded-2xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-300 group-hover:scale-110 transition-transform mb-3 shadow-lg shadow-indigo-950/50">
-              <Plus className="w-6 h-6" />
-            </div>
-            <p className="text-xs font-bold text-white group-hover:text-indigo-200">Create Playlist</p>
-            <p className="text-[10px] text-zinc-400 mt-0.5">Build your custom mix</p>
-          </div>
-
-          {displayPlaylists.map((pl) => (
-            <div
-              key={pl.id}
-              onClick={() => navigate({ type: 'playlist', id: pl.id })}
-              className="p-4 rounded-2xl bg-zinc-900/40 hover:bg-zinc-800/60 border border-zinc-800/60 hover:border-zinc-700 transition cursor-pointer flex flex-col"
-            >
-              <div className="w-full aspect-square rounded-xl bg-gradient-to-tr from-indigo-950 via-zinc-900 to-purple-950 flex items-center justify-center mb-3 text-indigo-400 border border-zinc-800">
-                <ListMusic className="w-12 h-12 opacity-80" />
-              </div>
-              <p className="text-xs font-semibold text-zinc-200 truncate">{pl.title}</p>
-              <span className="text-[10px] text-zinc-500 mt-1 font-mono">
-                {pl.trackIds.length} tracks
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
+  const { displayTracks, displayPlaylists, navigate, openCreatePlaylist } = useApp();
+  const {playPlaylist,playlistId:activePlaylist,isPlaying,isLoading,togglePlay}=usePlayer();
+  const [tab, setTab] = useState<'playlists' | 'songs'>('playlists');
+  const [importOpen, setImportOpen] = useState(false);
+  const [filter, setFilter] = useState('');
+  const [sort, setSort] = useState(() => localStorage.getItem('playlist-sort') || 'recent');
+  const sorted = [...displayPlaylists].filter(p => p.title.toLowerCase().includes(filter.toLowerCase())).sort((a,b) => Number(!!b.pinnedAt)-Number(!!a.pinnedAt) || (a.pinnedAt && b.pinnedAt ? b.pinnedAt-a.pinnedAt : sort === 'alphabetical' ? a.title.localeCompare(b.title) : (b.lastPlayedAt || b.updatedAt)-(a.lastPlayedAt || a.updatedAt)));
+  const songs = displayTracks.filter(t => (t.title + ' ' + t.artist).toLowerCase().includes(filter.toLowerCase()));
+  return <div id="library-view" className="page-stack">
+    <header className="page-heading"><div><p className="eyebrow">YOUR COLLECTION</p><h1>Library</h1></div><button className="player-icon outlined-icon" aria-label="New playlist" title="New playlist" onClick={() => openCreatePlaylist()}><Plus size={22} /></button></header>
+    <div role="tablist" aria-label="Library categories" className="segmented-tabs library-tabs" data-active-tab={tab}><span className="library-tab-indicator" aria-hidden="true" />{(['playlists', 'songs'] as const).map(value => <button key={value} role="tab" aria-selected={tab === value} onClick={() => { setTab(value); setFilter(''); }}><span>{value === 'playlists' ? 'Playlists' : 'Songs'}</span></button>)}</div>
+    <div key={tab} role="tabpanel" aria-label={tab} className={'library-panel library-panel-' + tab + ' section-stack'}>
+      <div className="library-toolbar"><span className="collection-count">{tab === 'playlists' ? displayPlaylists.length + ' playlists' : displayTracks.length + ' songs'}</span>{tab === 'playlists' && <label className="sort-control"><ArrowDownUp size={14} /><select aria-label="Sort playlists" value={sort} onChange={e => { setSort(e.target.value); localStorage.setItem('playlist-sort', e.target.value); }}><option value="recent">Recent</option><option value="alphabetical">Alphabetical</option></select></label>}<button className="text-button" onClick={() => setImportOpen(true)}><ArrowDownToLine size={15} />Import</button></div>
+      {(tab === 'songs' || displayPlaylists.length > 5) && <div className="search-field compact-search"><Search size={18} /><input aria-label={'Filter ' + tab} placeholder={'Find in your ' + tab + '…'} value={filter} onChange={e => setFilter(e.target.value)} /></div>}
+      {tab === 'playlists' ? <>
+        {!displayPlaylists.length && <div className="empty-state"><span className="empty-icon"><ListMusic size={28} /></span><h2>A place for every mood.</h2><p>Make a playlist from scratch or bring your favorites with you.</p><button className="primary-button" onClick={() => openCreatePlaylist()}><Plus size={17} />Create a playlist</button></div>}
+        <div className="playlist-library-list">{sorted.map(playlist => {
+          const active=activePlaylist===playlist.id;
+          const available=playlist.trackIds.map(id=>displayTracks.find(t=>t.id===id)).filter((t):t is import('../types/index.js').Track=>!!t);
+          return <div key={playlist.id} className="playlist-library-row" data-playlist-id={playlist.id}>
+            <button className="playlist-library-open" onClick={()=>navigate({type:'playlist',id:playlist.id})}><PlaylistCover playlist={playlist} tracks={displayTracks} className="playlist-row-art"/><span className="min-w-0 text-left"><strong className="block truncate">{playlist.title}</strong><small>{!!playlist.pinnedAt&&<Pin size={12}/>}Playlist · {playlist.trackIds.length} songs{playlist.playback?.shuffle&&<Shuffle size={12} aria-label="Shuffle enabled"/>}</small></span></button>
+            <button className="player-icon playlist-quick-play" aria-label={(active&&isLoading?'Cancel loading ':active&&isPlaying?'Pause ':'Play ')+playlist.title} disabled={!available.length} onClick={()=>{if(active){togglePlay();return;}void playPlaylist(playlist.id,sortPlaylistTracks(available,playlist.playback?.sort,playlist.customOrder),playlist.playback?.shuffle??false).catch(()=>notify('Couldn’t start this playlist. Try again.',true));}}>{active&&isLoading?<Loader2 size={20} className="animate-spin"/>:active&&isPlaying?<Pause size={20} fill="currentColor"/>:<Play size={20} fill="currentColor"/>}</button>
+          </div>;
+        })}</div>
+        {!!filter && !sorted.length && <div className="empty-state"><p>No playlists match “{filter}”.</p></div>}
+      </> : <>
+        <button className="liked-collection" onClick={() => navigate({ type: 'liked' })}><span className="shortcut-icon favorite-icon"><Heart size={22} fill="currentColor" /></span><span><strong>Liked songs</strong><small>All your favorites, together</small></span></button>
+        {!songs.length ? <div className="empty-state"><Search size={25} /><h2>{filter ? 'Nothing here yet' : 'Keep your favorites close.'}</h2><p>{filter ? 'Try a different song or artist.' : 'Songs you play, save, or download appear here.'}</p>{!filter && <button className="action-button" onClick={() => navigate({ type: 'search' })}>Discover music</button>}</div> : <div className="song-list">{songs.map((track, index) => <TrackRow key={track.id} track={track} index={index} tracksContext={songs} />)}</div>}
+      </>}
     </div>
-  );
+    <ImportPlaylistModal isOpen={importOpen} onClose={() => setImportOpen(false)} />
+  </div>;
 };

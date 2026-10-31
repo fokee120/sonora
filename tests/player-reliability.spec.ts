@@ -233,40 +233,15 @@ test('cancelled startup can resume at the deferred seek without stale abort erro
   expect(result.state.isLoading).toBe(true);
 });
 
-test('native source retry uses native seek, not live-capture timeline offsets', async ({ page }) => {
+test('retired cloud sources fail clearly without requesting Google authentication', async ({ page }) => {
   const result = await page.evaluate(async track => {
     const path = '/src/lib/audio/PlayerEngine.ts';
     const engine = (await import(path)).playerEngine;
-    const native = { ...track, id: 'gdrive:file', source: undefined, sourceId: undefined, cloudKey: 'gdrive://file' };
-    const authPath = '/src/lib/googleAuth.ts';
-    await (await import(authPath)).auth.authStateReady();
-    localStorage.setItem('gdrive_access_token', 'test-only-token');
-    const original = window.fetch;
-    window.fetch = (async () => new Response(new Blob(['audio']))) as typeof fetch;
-    try {
-      void engine.playTrack(native);
-      await new Promise(resolve => setTimeout(resolve, 10));
-      let audio = (window as any).__audios.at(-1);
-      audio.duration = 180;
-      audio.dispatchEvent(new Event('loadedmetadata'));
-      audio.dispatchEvent(new Event('playing'));
-      audio.currentTime = 40;
-      audio.dispatchEvent(new Event('timeupdate'));
-      audio.error = { code: 3 };
-      audio.dispatchEvent(new Event('error'));
-      void engine.play();
-      await new Promise(resolve => setTimeout(resolve, 10));
-      audio = (window as any).__audios.at(-1);
-      audio.duration = 180;
-      audio.dispatchEvent(new Event('loadedmetadata'));
-      const seeked = audio.currentTime;
-      audio.currentTime = 41;
-      audio.dispatchEvent(new Event('timeupdate'));
-      return { seeked, state: engine.getState() };
-    } finally { window.fetch = original; }
+    await engine.playTrack({ ...track, id: 'gdrive:old', source: undefined, sourceId: undefined, cloudKey: 'gdrive://old' });
+    return engine.getState();
   }, track);
-  expect(result.seeked).toBe(40);
-  expect(result.state.currentTime).toBe(41);
+  expect(result.error).toContain('Search for this song again');
+  expect(result.isPlaying).toBe(false);
 });
 
 test('playing a queued song updates the next-song cursor', async ({ page }) => {

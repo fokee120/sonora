@@ -1,392 +1,76 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Search, X, Music, Disc3, User, WifiOff, Youtube, Loader2, AlertCircle } from 'lucide-react';
+import {ytmSongToTrack} from '../lib/ytmusic/youtubeMusic.js';
+import {useCloudAccount} from '../lib/cloudAccount.js';
+import {SocialProfile} from '../components/settings/SocialProfile.js';
+import type { Track } from '../types/index.js';
+import React, { useEffect, useState } from 'react';
+import { Search, X, Loader2, ArrowUpRight, Clock3, WifiOff } from 'lucide-react';
 import { useApp } from '../context/AppContext.js';
 import { TrackRow } from '../components/common/TrackRow.js';
-import type { YtmFilter } from '../lib/ytmusic/youtubeMusic.js';
+import { ArtistCards, AlbumCards } from '../components/common/CatalogCards.js';
+import { searchCatalog, artistRoute, type CatalogArtist, type CatalogAlbum } from '../lib/ytmusic/catalog.js';
+import { Artwork } from '../components/common/Artwork.js';
 import { prepareYoutubeBridge } from '../lib/audio/audioSource.js';
-
-type SearchSource = 'vault' | 'youtube';
-
-const YT_FILTERS: YtmFilter[] = ['songs', 'videos', 'albums', 'artists'];
-
+const moods = [{ label: 'Slow mornings', query: 'acoustic soul morning', color: 'sage', note: 'Ease into the day' }, { label: 'After hours', query: 'late night r&b', color: 'violet', note: 'A little less ordinary' }, { label: 'In the zone', query: 'instrumental jazz focus', color: 'sand', note: 'Find your flow' }, { label: 'Turn it up', query: 'indie dance favorites', color: 'clay', note: 'Follow the feeling' }];
 export const SearchView: React.FC = () => {
-  const {
-    displayTracks,
-    displayAlbums,
-    displayArtists,
-    navigate,
-    isOnline,
-    ytResults,
-    ytFilter,
-    isSearchingYt,
-    ytSearchError,
-    searchYoutubeMusic,
-    clearYtResults,
-  } = useApp();
-
-  const [source, setSource] = useState<SearchSource>('youtube');
+  const { route, navigate, displayTracks, isOnline, ytResults, isSearchingYt, searchYoutubeMusic, clearYtResults } = useApp();
   const [query, setQuery] = useState('');
-  const [filterType, setFilterType] = useState<'all' | 'songs' | 'albums' | 'artists'>('all');
-  const [localYtError, setLocalYtError] = useState<string | null>(null);
-
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-
-  // Warm while browsing/searching, not after the first song click.
+  const [youtube,setYoutube]=useState(false),[videos,setVideos]=useState<Track[]>([]),[videoLoading,setVideoLoading]=useState(false);
+  const account=useCloudAccount();
+  const [peopleMode,setPeopleMode]=useState(false),[people,setPeople]=useState<any[]>([]),[personId,setPersonId]=useState(''),[peopleLoading,setPeopleLoading]=useState(false),[peopleError,setPeopleError]=useState('');
+  useEffect(()=>{if(!peopleMode||!account.authenticated||!query.trim()){setPeople([]);setPeopleLoading(false);setPeopleError('');return;}const controller=new AbortController();setPeopleLoading(true);setPeopleError('');const timer=setTimeout(()=>{fetch('/api/account/people?q='+encodeURIComponent(query.trim()),{signal:controller.signal}).then(r=>{if(!r.ok)throw Error('Couldn’t search profiles.');return r.json();}).then(setPeople).catch(e=>{if(!controller.signal.aborted)setPeopleError(e.message);}).finally(()=>{if(!controller.signal.aborted)setPeopleLoading(false);});},350);return()=>{clearTimeout(timer);controller.abort();};},[peopleMode,account.authenticated,query]);
+  const [kind,setKind]=useState<'songs'|'artists'|'albums'>('songs');
+  const [catalog,setCatalog]=useState<{artists:CatalogArtist[];albums:CatalogAlbum[]}>({artists:[],albums:[]});
+  const [catalogLoading,setCatalogLoading]=useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState('');
+  const [retry, setRetry] = useState(0);
+  const [recent, setRecent] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem('sonora:recent-searches') || '[]').filter((v: unknown) => typeof v === 'string').slice(0, 6); } catch { return []; } });
+  useEffect(() => { if (route.type === 'search' && route.query) setQuery(route.query); }, [route]);
+  useEffect(() => { if (isOnline && route.type === 'search') void prepareYoutubeBridge(); }, [isOnline, route.type]);
   useEffect(() => {
-    if (source === 'youtube' && isOnline) void prepareYoutubeBridge();
-  }, [source, isOnline]);
+    if (youtube || peopleMode || saved || !isOnline || route.type !== 'search' || kind !== 'songs') return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => { if (!query.trim()) { clearYtResults(); return; } setError(''); void searchYoutubeMusic(query, 'songs', controller.signal).catch(reason => { if (!controller.signal.aborted) setError(reason.message || 'Search failed. Try again.'); }); }, 350);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [query, saved, isOnline, searchYoutubeMusic, clearYtResults, retry, route.type, kind, peopleMode, youtube]);
+  useEffect(() => { if (ytResults.length && query.trim() && !isSearchingYt) { setRecent(previous => { const next = [query.trim(), ...previous.filter(q => q !== query.trim())].slice(0, 6); localStorage.setItem('sonora:recent-searches', JSON.stringify(next)); return next; }); } }, [ytResults]);
 
-  // Trigger debounced YouTube Music search when typing in YT mode
-  useEffect(() => {
-    if (source !== 'youtube') return;
-    const q = query.trim();
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-
-    if (!q) {
-      clearYtResults();
-      setLocalYtError(null);
-      return;
-    }
-
-    debounceRef.current = setTimeout(() => {
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
-      searchYoutubeMusic(q, ytFilter, controller.signal).catch((err: any) => {
-        if (err?.name === 'AbortError') return;
-        setLocalYtError(err?.message || 'YouTube Music search failed');
-      });
-    }, 450);
-
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, source, ytFilter]);
-
-  useEffect(() => () => abortRef.current?.abort(), []);
-
-  const switchSource = (next: SearchSource) => {
-    setSource(next);
-    setLocalYtError(null);
-    if (next === 'vault') {
-      clearYtResults();
-    } else if (query.trim()) {
-      // Re-run immediately when switching to YouTube with a live query
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
-      searchYoutubeMusic(query, ytFilter, controller.signal).catch((err: any) => {
-        setLocalYtError(err?.message || 'YouTube Music search failed');
-      });
-    }
-  };
-
-  const filteredResults = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) {
-      return { tracks: [], albums: [], artists: [] };
-    }
-
-    const matchedTracks = displayTracks.filter(
-      (t) =>
-        t.title.toLowerCase().includes(q) ||
-        t.artist.toLowerCase().includes(q) ||
-        t.album.toLowerCase().includes(q) ||
-        (t.genre && t.genre.toLowerCase().includes(q))
-    );
-
-    const matchedAlbums = displayAlbums.filter(
-      (a) => a.title.toLowerCase().includes(q) || a.artist.toLowerCase().includes(q)
-    );
-
-    const matchedArtists = displayArtists.filter((art) => art.name.toLowerCase().includes(q));
-
-    return {
-      tracks: matchedTracks,
-      albums: matchedAlbums,
-      artists: matchedArtists,
-    };
-  }, [query, displayTracks, displayAlbums, displayArtists]);
-
-  const hasQuery = query.trim().length > 0;
-  const totalMatches =
-    filteredResults.tracks.length + filteredResults.albums.length + filteredResults.artists.length;
-
-  return (
-    <div id="search-view" className="space-y-6 pb-12">
-      {/* Search Header & Input */}
-      <div className="space-y-4">
-        <h1 className="text-2xl font-bold tracking-tight text-white">Search</h1>
-
-        {!isOnline && source === 'youtube' && (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-amber-950/40 border border-amber-800/40 text-xs text-amber-300">
-            <WifiOff className="w-3.5 h-3.5" />
-            <span>YouTube Music search needs an internet connection</span>
-          </div>
-        )}
-        {!isOnline && source === 'vault' && (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-amber-950/40 border border-amber-800/40 text-xs text-amber-300">
-            <WifiOff className="w-3.5 h-3.5" />
-            <span>Searching within offline downloaded songs only</span>
-          </div>
-        )}
-
-        {/* Source Toggle */}
-        <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-zinc-900/70 border border-zinc-800">
-          <button
-            onClick={() => switchSource('youtube')}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition ${
-              source === 'youtube'
-                ? 'bg-red-600 text-white shadow-sm'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            <Youtube className="w-3.5 h-3.5" />
-            <span>YouTube Music</span>
-          </button>
-          <button
-            onClick={() => switchSource('vault')}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition ${
-              source === 'vault'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            <Disc3 className="w-3.5 h-3.5" />
-            <span>My Vault</span>
-          </button>
-        </div>
-
-        <div className="relative max-w-xl">
-          <Search className="w-5 h-5 absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500" />
-          <input
-            id="search-input"
-            type="text"
-            placeholder={
-              source === 'youtube'
-                ? 'Search the YouTube Music catalog...'
-                : 'Search songs, artists, albums, genres...'
-            }
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            className="w-full pl-11 pr-10 py-3 bg-zinc-900/80 border border-zinc-800 focus:border-indigo-500 rounded-2xl text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-hidden transition shadow-lg"
-            autoFocus
-          />
-          {isSearchingYt && (
-            <Loader2 className="w-4 h-4 animate-spin absolute right-3.5 top-1/2 -translate-y-1/2 text-red-400" />
-          )}
-          {query && !isSearchingYt && (
-            <button
-              onClick={() => setQuery('')}
-              className="absolute right-3.5 top-1/2 -translate-y-1/2 p-1 text-zinc-500 hover:text-zinc-300"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-
-        {/* Filter Pills */}
-        {hasQuery && source === 'vault' && (
-          <div className="flex items-center gap-2">
-            {(['all', 'songs', 'albums', 'artists'] as const).map((type) => (
-              <button
-                key={type}
-                onClick={() => setFilterType(type)}
-                className={`px-3 py-1 rounded-lg text-xs font-medium capitalize transition ${
-                  filterType === type
-                    ? 'bg-indigo-600 text-white shadow-xs'
-                    : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 border border-zinc-800'
-                }`}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {hasQuery && source === 'youtube' && (
-          <div className="flex items-center gap-2">
-            {YT_FILTERS.map((type) => (
-              <button
-                key={type}
-                onClick={() => {
-                  abortRef.current?.abort();
-                  const controller = new AbortController();
-                  abortRef.current = controller;
-                  searchYoutubeMusic(query, type, controller.signal).catch((err: any) => {
-                  setLocalYtError(err?.message || 'YouTube Music search failed');
-                  });
-                }}
-                className={`px-3 py-1 rounded-lg text-xs font-medium capitalize transition ${
-                  ytFilter === type
-                    ? 'bg-red-600 text-white shadow-xs'
-                    : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 border border-zinc-800'
-                }`}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Results View */}
-      {hasQuery ? (
-        source === 'youtube' ? (
-          /* ---- YouTube Music results ---- */
-          (isSearchingYt && ytResults.length === 0) ? (
-            <div className="py-16 text-center text-zinc-500 text-sm flex flex-col items-center gap-2">
-              <Loader2 className="w-6 h-6 animate-spin text-red-400" />
-              <span>Searching YouTube Music…</span>
-            </div>
-          ) : (localYtError || ytSearchError) && ytResults.length === 0 ? (
-            <div className="py-14 text-center text-sm text-rose-300 bg-rose-950/20 border border-rose-900/30 rounded-2xl flex flex-col items-center gap-2">
-              <AlertCircle className="w-6 h-6" />
-              <span>{localYtError || ytSearchError}</span>
-              <span className="text-xs text-zinc-500">
-                The YouTube Music search runs server-side; check the server logs if this keeps happening.
-              </span>
-            </div>
-          ) : ytResults.length === 0 ? (
-            <div className="py-16 text-center text-zinc-500 text-sm">
-              <Youtube className="w-8 h-8 mx-auto mb-2 opacity-40 text-red-400" />
-              <p>No YouTube Music results for &ldquo;{query}&rdquo;</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
-                  <Music className="w-4 h-4 text-red-400" />
-                  <span>YouTube Music ({ytResults.length})</span>
-                </h2>
-                <p className="text-[11px] text-zinc-500 hidden sm:block">
-                  Press the download icon to keep a song offline in browser storage
-                </p>
-              </div>
-              <div className="divide-y divide-zinc-900/60 rounded-2xl bg-zinc-900/20 border border-zinc-800/50 p-1">
-                {ytResults.map((track, idx) => (
-                  <TrackRow
-                    key={`yt-${track.id}`}
-                    track={track}
-                    index={idx}
-                    tracksContext={ytResults}
-                  />
-                ))}
-              </div>
-            </div>
-          )
-        ) : /* ---- Vault results ---- */
-        totalMatches === 0 ? (
-          <div className="py-16 text-center text-zinc-500 text-sm">
-            <Search className="w-8 h-8 mx-auto mb-2 opacity-40 text-zinc-400" />
-            <p>No results found for &ldquo;{query}&rdquo;</p>
-            <p className="text-xs text-zinc-600 mt-1">
-              Not in your vault?{' '}
-              <button
-                onClick={() => switchSource('youtube')}
-                className="text-red-400 hover:text-red-300 underline underline-offset-2"
-              >
-                Search YouTube Music
-              </button>
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-8">
-            {/* Albums Results */}
-            {(filterType === 'all' || filterType === 'albums') &&
-              filteredResults.albums.length > 0 && (
-                <div className="space-y-3">
-                  <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
-                    <Disc3 className="w-4 h-4 text-indigo-400" />
-                    <span>Albums ({filteredResults.albums.length})</span>
-                  </h2>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-                    {filteredResults.albums.map((album) => (
-                      <div
-                        key={album.id}
-                        onClick={() => navigate({ type: 'album', id: album.id })}
-                        className="p-2.5 rounded-xl bg-zinc-900/40 hover:bg-zinc-800/60 border border-zinc-800 transition cursor-pointer"
-                      >
-                        <img
-                          src={album.artworkUrl || '/icon.svg'}
-                          alt={album.title}
-                          className="w-full aspect-square object-cover rounded-lg bg-zinc-950 mb-2"
-                          loading="lazy"
-                          decoding="async"
-                        />
-                        <p className="text-xs font-medium text-zinc-200 truncate">{album.title}</p>
-                        <p className="text-[11px] text-zinc-500 truncate">{album.artist}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-            {/* Artists Results */}
-            {(filterType === 'all' || filterType === 'artists') &&
-              filteredResults.artists.length > 0 && (
-                <div className="space-y-3">
-                  <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
-                    <User className="w-4 h-4 text-indigo-400" />
-                    <span>Artists ({filteredResults.artists.length})</span>
-                  </h2>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-3">
-                    {filteredResults.artists.map((artist) => (
-                      <div
-                        key={artist.id}
-                        onClick={() => navigate({ type: 'artist', id: artist.id })}
-                        className="p-3 rounded-xl bg-zinc-900/40 hover:bg-zinc-800/60 border border-zinc-800 transition cursor-pointer flex flex-col items-center text-center"
-                      >
-                        <img
-                          src={artist.artworkUrl || '/icon.svg'}
-                          alt={artist.name}
-                          className="w-16 h-16 rounded-full object-cover bg-zinc-950 mb-2 border border-zinc-800"
-                          loading="lazy"
-                          decoding="async"
-                        />
-                        <p className="text-xs font-medium text-zinc-200 truncate w-full">
-                          {artist.name}
-                        </p>
-                        <p className="text-[10px] text-zinc-500 font-mono">
-                          {artist.trackCount} tracks
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-            {/* Songs Results */}
-            {(filterType === 'all' || filterType === 'songs') &&
-              filteredResults.tracks.length > 0 && (
-                <div className="space-y-3">
-                  <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
-                    <Music className="w-4 h-4 text-indigo-400" />
-                    <span>Songs ({filteredResults.tracks.length})</span>
-                  </h2>
-                  <div className="divide-y divide-zinc-900/60 rounded-2xl bg-zinc-900/20 border border-zinc-800/50 p-1">
-                    {filteredResults.tracks.map((track, idx) => (
-                      <TrackRow
-                        key={`search-${track.id}`}
-                        track={track}
-                        index={idx}
-                        tracksContext={filteredResults.tracks}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-          </div>
-        )
-      ) : (
-        <div className="py-20 text-center text-zinc-500 text-xs">
-          {source === 'youtube'
-            ? 'Search the full YouTube Music catalog, then download songs to keep them offline.'
-            : 'Type to search your personal music files, or switch to YouTube Music to pull new songs.'}
-        </div>
-      )}
-    </div>
-  );
+  useEffect(()=>{
+    if(youtube||peopleMode||saved||!isOnline||route.type!=='search'||kind==='songs')return;
+    const controller=new AbortController();setCatalog({artists:[],albums:[]});setError('');
+    if(!query.trim()){setCatalogLoading(false);return;}
+    setCatalogLoading(true);
+    const timer=setTimeout(()=>{void searchCatalog(query,kind,controller.signal).then(result=>{if(!controller.signal.aborted)setCatalog(result);}).catch(e=>{if(!controller.signal.aborted)setError(e.message||'Search failed. Try again.');}).finally(()=>{if(!controller.signal.aborted)setCatalogLoading(false);});},350);
+    return()=>{clearTimeout(timer);controller.abort();};
+  },[query,kind,saved,isOnline,retry,route.type,peopleMode,youtube]);
+  useEffect(()=>{
+    if(!youtube||peopleMode||saved||!isOnline||route.type!=='search')return;
+    const controller=new AbortController();setVideos([]);setError('');setVideoLoading(!!query.trim());
+    if(!query.trim())return;
+    const timer=setTimeout(()=>{fetch('/api/youtube/search?q='+encodeURIComponent(query.trim()),{signal:controller.signal}).then(async r=>{const data=await r.json();if(!r.ok)throw Error(data.error||'YouTube search failed.');return data;}).then(data=>{if(!controller.signal.aborted)setVideos((data.songs||[]).map(ytmSongToTrack));}).catch(e=>{if(!controller.signal.aborted)setError(e.message);}).finally(()=>{if(!controller.signal.aborted)setVideoLoading(false);});},350);
+    return()=>{clearTimeout(timer);controller.abort();};
+  },[youtube,peopleMode,saved,isOnline,route.type,query,retry]);
+  const local = saved || !isOnline;
+  const results = local ? displayTracks.filter(track => (track.title + ' ' + track.artist).toLowerCase().includes(query.trim().toLowerCase())) : youtube ? videos : kind==='songs' && query.trim() ? ytResults : [];
+  const loading=!local&&(youtube?videoLoading:kind==='songs'?isSearchingYt:catalogLoading);
+  const catalogCount=kind==='artists'?catalog.artists.length:catalog.albums.length;
+  const count=local||youtube||kind==='songs'?results.length:catalogCount;
+  const fromCollection=[...new Map<string,Track>(displayTracks.map(track=>[track.artist,track] as [string,Track])).values()].slice(0,8);
+  return <div id="search-view" className="page-stack"><header className="page-heading"><div><p className="eyebrow">FOLLOW YOUR CURIOSITY</p><h1>Search</h1></div></header>
+    <form className="search-field" onSubmit={e => { e.preventDefault(); (document.activeElement as HTMLElement)?.blur(); }}><Search size={21} /><input onPointerDown={event=>{if(document.activeElement!==event.currentTarget){event.preventDefault();event.currentTarget.focus({preventScroll:true});}}} id="search-input" aria-label={peopleMode?'Search people':'Search songs'} type="search" enterKeyHint="search" value={query} onChange={event => { setQuery(event.target.value); setError(''); if (!event.target.value.trim()) clearYtResults(); }} placeholder={peopleMode?'Search people by name…':'Songs, artists, something you love…'} autoComplete="off" autoCorrect="off" spellCheck={false} />{query && <button type="button" aria-label="Clear search" onClick={() => { setQuery(''); setError(''); clearYtResults(); }}><X size={19} /></button>}</form>
+    <div className="segmented-tabs search-source-tabs"><button aria-pressed={!saved&&!peopleMode&&!youtube} onClick={()=>{setYoutube(false);setSaved(false);setPeopleMode(false);}}>YT Music</button><button aria-pressed={youtube&&!saved&&!peopleMode} onClick={()=>{setYoutube(true);setSaved(false);setPeopleMode(false);setKind('songs');setError('');}}>YouTube</button><button aria-pressed={saved&&!peopleMode} onClick={()=>{setSaved(true);setYoutube(false);setPeopleMode(false);}}>Saved songs</button><button aria-pressed={peopleMode} onClick={()=>{setPeopleMode(true);setYoutube(false);setPersonId('');}}>People</button></div>
+    {peopleMode ? <section className="section-stack">{!account.authenticated?<div className="empty-state"><h2>Find your people</h2><p>Sign in with Google in Settings to search profiles.</p><button className="action-button" onClick={()=>navigate({type:'settings'})}>Open settings</button></div>:personId?<><button className="text-button" onClick={()=>setPersonId('')}>← Search results</button><SocialProfile initialProfileId={personId}/></>:<>{peopleLoading&&<p role="status">Searching profiles…</p>}{peopleError&&<p role="alert">{peopleError}</p>}{!peopleLoading&&!peopleError&&!query.trim()&&<p>Search for someone by their profile name.</p>}{!peopleLoading&&!peopleError&&!!query.trim()&&!people.length&&<p>No profiles found.</p>}<div className="social-list">{people.map(p=><button className="social-person" key={p.id} onClick={()=>navigate({type:'profile',id:p.id})}>{p.picture?<img src={p.picture} alt=""/>:<span>♪</span>}<strong>{p.name}</strong></button>)}</div></>}</section> : <>
+    {!local && !youtube && <div className="discovery-filters" role="group" aria-label="Search categories">{(["songs","artists","albums"] as const).map(value=><button key={value} aria-pressed={kind===value} onClick={()=>{setKind(value);setError("");}}>{value[0].toUpperCase()+value.slice(1)}</button>)}</div>}
+    {!isOnline && <p className="inline-message"><WifiOff size={17} />You’re offline. Search your saved songs here.</p>}
+    {error && <div role="alert" className="error-card"><strong>Couldn’t reach the music.</strong><p>{error}</p><button className="action-button" onClick={() => setRetry(n => n + 1)}>Try again</button></div>}
+    {loading && <div className="search-loading" role="status"><span><Loader2 size={17} className="animate-spin" />Searching…</span><div className="skeleton-rows" aria-hidden="true"><i /><i /><i /><i /></div></div>}
+    {results.length > 0 && !loading && <section className="section-stack"><div className="section-heading"><h2>{local ? 'In your library' : youtube ? 'YouTube · Audio only' : 'Songs'}</h2><span className="collection-count">{results.length} results</span></div><div className="song-list" aria-label="Search results">{results.map((track, index) => <TrackRow key={track.id} track={track} index={index} tracksContext={results} />)}</div></section>}
+    {!local && !youtube && kind!=="songs" && !!query.trim() && !loading && catalogCount>0 && <section className="section-stack"><div className="section-heading"><h2>{kind==="artists"?"Artists":"Albums"}</h2><span className="collection-count">{catalogCount} results</span></div>{kind==="artists"?<ArtistCards artists={catalog.artists}/>:<AlbumCards albums={catalog.albums}/>}</section>}
+    {!count && !loading && !error && (query.trim() || local ? <div className="empty-state"><Search size={28} /><h2>{query ? (kind==='songs'||local?'No songs found.':kind==='artists'?'No artists found.':'No albums found.') : 'Your music, a little closer.'}</h2><p>{query ? 'Try another song, artist, or a few different words.' : 'Search your saved songs by title or artist.'}</p></div> : <>
+      {recent.length > 0 && <section className="section-stack"><div className="section-heading"><h2>Recent searches</h2><button className="text-button" onClick={() => { setRecent([]); localStorage.removeItem('sonora:recent-searches'); }}>Clear</button></div><div className="recent-searches">{recent.map(q => <button key={q} onClick={() => setQuery(q)}><Clock3 size={16} /><span>{q}</span><ArrowUpRight size={16} /></button>)}</div></section>}
+      <section className="section-stack"><div className="section-heading"><div><h2>Find a feeling</h2><p>Search for your next favorite.</p></div></div><div className="mood-grid">{moods.map((m, i) => <button key={m.label} className={'mood-card mood-' + m.color} onClick={() => setQuery(m.query)}><span className="mood-number">0{i + 1}</span><ArrowUpRight size={19} /><strong>{m.label}</strong><small>{m.note}</small><span className="mood-lines" aria-hidden="true" /></button>)}</div></section>
+      {fromCollection.length>0 && <section className="section-stack"><div className="section-heading"><h2>From your collection</h2></div><div className="collection-artists">{fromCollection.map(track=><button key={track.artist} onClick={()=>navigate(artistRoute(track))}><Artwork track={track}/><strong>{track.artist}</strong><small>Explore artist</small></button>)}</div></section>}
+    </>)}
+    </>}
+  </div>;
 };

@@ -1,150 +1,43 @@
-import React from 'react';
+import {initializeCloudAccount} from './lib/cloudAccount.js';
+import React, { useEffect } from 'react';
+import { MotionConfig } from 'motion/react';
+import { Plus, Search } from 'lucide-react';
+import { useAppViewport } from './hooks/useAppViewport.js';
 import { AppProvider, useApp } from './context/AppContext.js';
 import { Sidebar } from './components/navigation/Sidebar.js';
 import { MobileNavBar } from './components/navigation/MobileNavBar.js';
+import { PageStage } from './components/navigation/PageStage.js';
 import { BottomPlayer } from './components/player/BottomPlayer.js';
 import { OfflineIndicator } from './components/common/OfflineIndicator.js';
-import { HomeView } from './views/HomeView.js';
-import { SearchView } from './views/SearchView.js';
-import { LibraryView } from './views/LibraryView.js';
-import { AlbumDetailView } from './views/AlbumDetailView.js';
-import { ArtistDetailView } from './views/ArtistDetailView.js';
-import { PlaylistDetailView } from './views/PlaylistDetailView.js';
-import { LikedSongsView } from './views/LikedSongsView.js';
-import { DownloadsView } from './views/DownloadsView.js';
-import { SettingsView } from './views/SettingsView.js';
-import { usePlayer } from './hooks/usePlayer.js';
 import { CreatePlaylistModal } from './components/playlist/CreatePlaylistModal.js';
-import { GoogleDriveConnectCard } from './components/auth/GoogleDriveConnectCard.js';
-import { Plus } from 'lucide-react';
+import {WeeklyRecapNotice} from './components/common/WeeklyRecapNotice.js';
+import { ToastHost } from './components/common/ToastHost.js';
 
-const MainAppContent: React.FC = () => {
-  const {
-    route,
-    isCreatePlaylistOpen,
-    createPlaylistInitialTrackId,
-    closeCreatePlaylist,
-    openCreatePlaylist,
-  } = useApp();
-  const { currentTrack } = usePlayer();
-  const renderCurrentView = () => {
-    switch (route.type) {
-      case 'home':
-        return <HomeView />;
-      case 'search':
-        return <SearchView />;
-      case 'library':
-      case 'albums':
-      case 'artists':
-        return <LibraryView />;
-      case 'album':
-        return <AlbumDetailView albumId={route.id} />;
-      case 'artist':
-        return <ArtistDetailView artistId={route.id} />;
-      case 'playlist':
-        return <PlaylistDetailView playlistId={route.id} />;
-      case 'liked':
-        return <LikedSongsView />;
-      case 'downloads':
-        return <DownloadsView />;
-      case 'settings':
-        return <SettingsView />;
-      default:
-        return <HomeView />;
-    }
-  };
-
-  return (
-    <div className="app-shell flex flex-col w-screen overflow-hidden bg-[#050505] text-white antialiased font-sans relative selection:bg-blue-600 selection:text-white">
-      {/* Atmospheric Ambient Glow Layer */}
-      <div
-        className="absolute inset-0 pointer-events-none z-0"
-        style={{
-          background:
-            'radial-gradient(circle at 0% 0%, rgba(59,130,246,0.09) 0%, transparent 45%), radial-gradient(circle at 100% 100%, rgba(147,51,234,0.06) 0%, transparent 45%), radial-gradient(circle at 50% 50%, rgba(59,130,246,0.03) 0%, transparent 60%)',
-        }}
-      />
-
-      {/* Offline Status Top Banner */}
-      <OfflineIndicator />
-
-      {/* Main App Layout */}
-      <div className="flex flex-1 overflow-hidden relative z-10">
-        {/* Desktop Left Sidebar */}
-        <Sidebar />
-
-        {/* Main Content Column */}
-        <div className="flex-1 flex flex-col overflow-hidden relative">
-          {/* Top Atmospheric Header */}
-          <header className="h-16 shrink-0 hidden md:flex items-center justify-between px-8 bg-black/20 backdrop-blur-md border-b border-white/5 z-20 select-none">
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-semibold tracking-wider uppercase text-zinc-400">
-                  Sonora
-                </span>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              {/* Google Drive Status Bar */}
-              <GoogleDriveConnectCard compact />
-
-              {/* Quick Create Playlist Button */}
-              <button
-                onClick={() => openCreatePlaylist()}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-xs font-semibold transition"
-                title="Create a new playlist"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>New Playlist</span>
-              </button>
-
-              <div className="text-right ml-2">
-                <div className="text-xs font-medium text-white">
-                  Personal Music Library
-                </div>
-                <div className="text-[10px] text-zinc-500 font-mono tracking-tight">
-                  {currentTrack ? `Now Playing: ${currentTrack.title}` : 'High-Fidelity Audio'}
-                </div>
-              </div>
-            </div>
-          </header>
-
-          {/* Dynamic Center Scroll View */}
-          <main
-            id="main-content-scroll"
-            className={`main-scroll flex-1 overflow-y-auto px-4 sm:px-8 transition-all ${
-              currentTrack ? 'pb-with-player md:pb-28' : 'pb-with-nav md:pb-8'
-            }`}
-          >
-            <div className="max-w-7xl mx-auto w-full">{renderCurrentView()}</div>
-          </main>
-        </div>
+function MainAppContent() {
+  const { route, isCreatePlaylistOpen, createPlaylistInitialTrackId, closeCreatePlaylist, openCreatePlaylist, navigate, libraryError, refreshLibrary } = useApp();
+  useAppViewport();
+  useEffect(()=>initializeCloudAccount(),[]);
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if ((event.target as HTMLElement).closest('input,textarea,select,[contenteditable]') || document.querySelector('[data-sonora-overlay]')) return;
+      if (event.key === '/') { event.preventDefault(); navigate({ type: 'search' }); requestAnimationFrame(() => document.getElementById('search-input')?.focus()); }
+    };
+    window.addEventListener('keydown', shortcut);
+    return () => window.removeEventListener('keydown', shortcut);
+  }, [navigate]);
+  return <div className="app-shell flex flex-col overflow-hidden text-white antialiased relative" onPointerDownCapture={event => { if (event.pointerType === 'touch' && (event.target as HTMLElement).closest('button:not(:disabled)')) { try { navigator.vibrate?.(8); } catch {} } }}>
+    <OfflineIndicator />
+    <div className="flex flex-1 min-h-0 overflow-hidden">
+      <Sidebar />
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden relative">
+        <header className="desktop-header"><span>Your listening space</span><div><button className="header-search" onClick={() => navigate({ type: 'search' })}><Search size={16} />Find something good <kbd>/</kbd></button><button className="action-button" onClick={() => openCreatePlaylist()}><Plus size={16} />New playlist</button></div></header>
+        {libraryError && <div className="library-error" role="alert">Your library couldn’t load. <button onClick={() => void refreshLibrary()}>Try again</button></div>}
+        <PageStage />
       </div>
-
-      {/* Persistent Bottom Audio Player */}
-      <BottomPlayer />
-
-      {/* Mobile Bottom Navigation Bar */}
-      <MobileNavBar />
-
-      {/* Create Playlist Modal */}
-      {isCreatePlaylistOpen && (
-        <CreatePlaylistModal
-          isOpen={isCreatePlaylistOpen}
-          initialTrackId={createPlaylistInitialTrackId}
-          onClose={closeCreatePlaylist}
-        />
-      )}
-
     </div>
-  );
-};
-
-export default function App() {
-  return (
-    <AppProvider>
-      <MainAppContent />
-    </AppProvider>
-  );
+    <div className={'app-dock shrink-0 relative z-40'+(['playlist','settings','downloads'].includes(route.type)?' detail-dock':'')+(route.type==='playlist'?' playlist-dock':'')}><BottomPlayer /><ToastHost /><MobileNavBar /></div>
+    <WeeklyRecapNotice/>
+    <CreatePlaylistModal isOpen={isCreatePlaylistOpen} initialTrackId={createPlaylistInitialTrackId} onClose={closeCreatePlaylist} />
+  </div>;
 }
+export default function App() { return <MotionConfig reducedMotion="user"><AppProvider><MainAppContent /></AppProvider></MotionConfig>; }

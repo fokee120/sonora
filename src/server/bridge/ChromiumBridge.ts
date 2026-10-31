@@ -541,7 +541,7 @@ export class ChromiumBridge extends EventEmitter {
     const session = await this.waitForSession(sessionId, videoId, signal);
     if (!session || signal?.aborted) return;
     const page = session.page;
-    session.active?.end(new Error('Audio capture superseded by a new stream'));
+    session.active?.end(Object.assign(new Error('Audio capture superseded by a new stream'),{code:'AUDIO_STREAM_SUPERSEDED'}));
     const stream = new AudioStream(++session.generation);
     session.active = stream;
     stream.onRecorded = receipt?.onRecorded;

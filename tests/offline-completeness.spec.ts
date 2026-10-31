@@ -20,7 +20,9 @@ async function setup(page: Page, duration = track.duration) {
     await (await import(path)).dbService.saveTracks([fixture]);
   }, { ...track, duration });
   await page.reload();
-  await expect(page.getByText(track.title).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Library', exact: true }).click();
+  await page.getByRole('tab', { name: 'Songs', exact: true }).click();
+  await expect(page.locator('#library-view').getByText(track.title, {exact:true})).toBeVisible();
 }
 async function state(page: Page) {
   return page.evaluate(async id => {
@@ -29,11 +31,40 @@ async function state(page: Page) {
     return { state: offlineManager.getDownloadState(id), stored: !!await offlineManager.audioStorage.get(id) };
   }, track.id);
 }
+
+test('opening, dismissing, and changing views keeps downloaded audio playing', async ({ page, context }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await setup(page, 30);
+  await page.route('**/api/ytmusic/download/**', route => route.fulfill({ body: wav(30), headers: { 'content-type': 'audio/wav' } }));
+  const row = page.locator('#library-view').locator(`[id="track-row-${track.id}"]`).first();
+  await row.getByTitle('Download for offline playback').click();
+  await expect.poll(async () => (await state(page)).state?.status).toBe('completed');
+  await context.setOffline(true);
+  await row.click();
+  const playback = () => page.evaluate(async () => {
+    const path = '/src/lib/audio/PlayerEngine.ts';
+    const engine = (await import(path)).playerEngine;
+    return engine.getState();
+  });
+  await expect.poll(async () => (await playback()).currentTime).toBeGreaterThan(0);
+  const start = (await playback()).currentTime;
+  await page.getByRole('button', { name: `Open player for ${track.title}` }).click();
+  await expect(page.getByRole('dialog', { name: 'Now playing' })).toBeVisible();
+  await page.getByRole('button', { name: 'Minimize player' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Library', exact: true }).click();
+  await expect(page.locator('#library-view')).toBeVisible();
+  await expect.poll(async () => (await playback()).currentTime).toBeGreaterThan(start);
+  const result = await playback();
+  expect(result.isPlaying).toBe(true);
+  expect(result.playbackSource).toBe('local');
+  expect(result.error).toBeNull();
+});
 test('five-second EOF is rejected before storing a long song and offers retry', async ({ page }) => {
   await setup(page);
   // Even a response claiming success must not override native decoded evidence.
   await page.route('**/api/ytmusic/download/**', route => route.fulfill({ body: wav(5), headers: { 'content-type': 'audio/wav', 'X-Audio-Complete': 'true', 'X-Audio-Duration': '120' } }));
-  const row = page.locator(`[id="track-row-${track.id}"]`).first();
+  const row = page.locator('#library-view').locator(`[id="track-row-${track.id}"]`).first();
   await row.hover(); await row.getByTitle('Download for offline playback').click();
   await expect.poll(async () => (await state(page)).state?.status).toBe('failed');
   expect((await state(page)).stored).toBe(false);
@@ -59,8 +90,8 @@ test('legacy truncated cache shows redownload, keeps catalog duration and other 
     (manager as any).notify();
   }, { track, bytes: [...wav(5)] });
   await context.setOffline(true);
-  await page.getByText(track.title).first().click();
-  await expect(page.locator('#bottom-player-bar').getByRole('alert')).toContainText(/incomplete.*retry the download/i);
+  await page.locator('#library-view').getByText(track.title, {exact:true}).click();
+  await expect(page.getByTestId('dock-notices').getByRole('alert')).toContainText(/incomplete.*retry the download/i);
   const result = await page.evaluate(async id => {
     const playerPath = '/src/lib/audio/PlayerEngine.ts', offlinePath = '/src/lib/offline/OfflineManager.ts';
     const { offlineManager: manager } = await import(offlinePath);
@@ -73,7 +104,7 @@ test('legacy truncated cache shows redownload, keeps catalog duration and other 
   expect(result.retained).toBe(true);
   expect(result.state?.status).toBe('failed');
   await context.setOffline(false);
-  const row = page.locator(`[id="track-row-${track.id}"]`).first();
+  const row = page.locator('#library-view').locator(`[id="track-row-${track.id}"]`).first();
   await row.hover();
   await expect(row.getByTitle('Retry download')).toBeVisible();
 });
@@ -98,11 +129,11 @@ for (const fixture of ['offline-complete.webm', 'offline-infinite.webm']) {
     expect(measured.finiteMetadata).toBe(fixture === 'offline-complete.webm');
     expect(measured.actual).toBeCloseTo(3, 1);
     await page.route('**/api/ytmusic/download/**', route => route.fulfill({ body: audio, headers: { 'content-type': 'audio/webm' } }));
-    const row = page.locator(`[id="track-row-${track.id}"]`).first();
+    const row = page.locator('#library-view').locator(`[id="track-row-${track.id}"]`).first();
     await row.hover(); await row.getByTitle('Download for offline playback').click();
     await expect.poll(async () => (await state(page)).state?.status).toBe('completed');
     await context.setOffline(true);
-    await page.getByText(track.title).first().click();
+    await page.locator('#library-view').getByText(track.title, {exact:true}).click();
     await expect.poll(() => page.evaluate(async () => {
       const path = '/src/lib/audio/PlayerEngine.ts';
       const state = (await import(path)).playerEngine.getState();
@@ -115,12 +146,12 @@ for (const [expected, actual] of [[26, 25], [5, 5], [0, 4]]) {
   test(`complete native WAV ${actual}s saves and plays offline (catalog ${expected}s)`, async ({ page, context }) => {
     await setup(page, expected);
     await page.route('**/api/ytmusic/download/**', route => route.fulfill({ body: wav(actual), headers: { 'content-type': 'audio/wav' } }));
-    const row = page.locator(`[id="track-row-${track.id}"]`).first();
+    const row = page.locator('#library-view').locator(`[id="track-row-${track.id}"]`).first();
     await row.hover(); await row.getByTitle('Download for offline playback').click();
     await expect.poll(async () => (await state(page)).state?.status).toBe('completed');
     expect((await state(page)).stored).toBe(true);
     await context.setOffline(true);
-    await page.getByText(track.title).first().click();
+    await page.locator('#library-view').getByText(track.title, {exact:true}).click();
     await expect.poll(() => page.evaluate(async () => {
       const path = '/src/lib/audio/PlayerEngine.ts';
       const state = (await import(path)).playerEngine.getState();

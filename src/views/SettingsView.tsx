@@ -1,139 +1,35 @@
-import React, { useState } from 'react';
-import { HardDrive, CheckCircle2, AlertCircle, Smartphone } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { ArrowLeft, Download, SlidersHorizontal } from 'lucide-react';
+import {AccountCard} from '../components/settings/AccountCard.js';
+import { AppearanceCard } from '../components/settings/AppearanceCard.js';
+import { AudioCacheCard } from '../components/settings/AudioCacheCard.js';
 import { useApp } from '../context/AppContext.js';
+import { DownloadsView } from './DownloadsView.js';
+import { ImportPlaylistModal } from '../components/playlist/ImportPlaylistModal.js';
 import { PWAInstallButton } from '../components/common/PWAInstallButton.js';
-import { usePWAInstall } from '../hooks/usePWAInstall.js';
-import { GoogleDriveConnectCard } from '../components/auth/GoogleDriveConnectCard.js';
-import { YoutubeMusicCard } from '../components/settings/YoutubeMusicCard.js';
-
-export const SettingsView: React.FC = () => {
-  const { storageInfo, refreshStorageInfo, requestPersistStorage, clearAllDownloads } = useApp();
-  const { isInstalled } = usePWAInstall();
-  const [isPersisting, setIsPersisting] = useState(false);
-  const [persistMessage, setPersistMessage] = useState<string | null>(null);
-  const handlePersist = async () => {
-    setIsPersisting(true);
-    setPersistMessage(null);
-    try {
-      if (!navigator.storage?.persist) {
-        setPersistMessage('This browser does not support storage protection requests. Downloads are still available.');
-        return;
-      }
-      const granted = await requestPersistStorage();
-      setPersistMessage(granted
-        ? 'Storage protection is enabled on this device.'
-        : 'The browser did not grant protection. Downloads still work, but the browser may remove them when space is low.');
-    } catch {
-      setPersistMessage('Could not request storage protection. Please try again.');
-    } finally {
-      setIsPersisting(false);
-    }
-  };
-
-  return (
-    <div id="settings-view" className="space-y-8 pb-16 max-w-4xl">
-      <h1 className="text-2xl font-bold">Settings & Storage</h1>
-      <p className="text-xs text-zinc-400">Google Drive, YouTube Music, offline downloads, and app installation.</p>
-      <GoogleDriveConnectCard />
-      <YoutubeMusicCard />
-      <section className="p-6 rounded-3xl bg-zinc-900/50 border border-zinc-800/80 shadow-xl space-y-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 flex items-center justify-center">
-            <HardDrive className="w-5 h-5" />
-          </div>
-          <div>
-            <h2 className="text-sm font-bold text-white">Browser Storage & IndexedDB</h2>
-            <p className="text-xs text-zinc-400 mt-0.5">
-              Downloaded audio files (MP3, M4A, FLAC, WAV) are stored securely in IndexedDB as raw binary Blobs.
-            </p>
-          </div>
-        </div>
-
-        {storageInfo && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-            <div className="p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800 space-y-1">
-              <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
-                IndexedDB Audio Blobs
-              </span>
-              <p className="text-lg font-bold font-mono text-white">
-                {storageInfo.trackCount} Tracks ({storageInfo.downloadSizeMB} MB)
-              </p>
-              <div className="flex items-center gap-2 pt-2">
-                <button
-                  onClick={() => refreshStorageInfo()}
-                  className="text-xs text-indigo-400 hover:text-indigo-300 font-medium"
-                >
-                  Recalculate Size
-                </button>
-                {storageInfo.trackCount > 0 && (
-                  <button
-                    onClick={() => clearAllDownloads()}
-                    className="text-xs text-rose-400 hover:text-rose-300 font-medium"
-                  >
-                    Clear All Files
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800 space-y-2">
-              <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
-                Storage Eviction Protection
-              </span>
-              <div className="flex items-center gap-2">
-                {storageInfo.persisted ? (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                ) : (
-                  <AlertCircle className="w-4 h-4 text-amber-400" />
-                )}
-                <span className="text-xs font-semibold text-zinc-200">
-                  {storageInfo.persisted ? 'Storage is Persistent' : 'Storage is Best-Effort'}
-                </span>
-              </div>
-              {!storageInfo.persisted && (
-                <button
-                  onClick={handlePersist}
-                  disabled={isPersisting}
-                  className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition"
-                >
-                  {isPersisting ? 'Requesting...' : 'Request Persistent Storage'}
-                </button>
-              )}
-              {persistMessage && <p role="status" className="text-xs text-zinc-300">{persistMessage}</p>}
-            </div>
-          </div>
-        )}
-      </section>
-
-      {/* PWA Installation & Safari Instructions */}
-      <section className="p-6 rounded-3xl bg-zinc-900/50 border border-zinc-800/80 shadow-xl space-y-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20 flex items-center justify-center">
-            <Smartphone className="w-5 h-5" />
-          </div>
-          <div>
-            <h2 className="text-sm font-bold text-white">Progressive Web App (PWA)</h2>
-            <p className="text-xs text-zinc-400 mt-0.5">
-              Install the player as a standalone native app on iOS, macOS, Android, or Windows.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800">
-          <div>
-            <p className="text-xs font-semibold text-zinc-200">
-              {isInstalled ? 'App is currently running in Standalone PWA Mode' : 'Install Standalone Application'}
-            </p>
-            <p className="text-[11px] text-zinc-400 mt-0.5">
-              Provides full-screen media playback, hardware media key integration, and lock-screen controls.
-            </p>
-          </div>
-          <div className="shrink-0">
-            <PWAInstallButton variant="banner" />
-          </div>
-        </div>
-      </section>
-
-    </div>
-  );
+import { OfflineReadiness } from '../components/common/OfflineReadiness.js';
+import { notify } from '../components/common/ToastHost.js';
+import { dbService } from '../lib/db.js';
+import { repairDownloadedArtwork } from '../lib/artwork.js';
+import { uiSoundsEnabled,setUiSoundsEnabled } from '../lib/uiFeedback.js';
+export const SettingsView: React.FC<{ initialTab?: 'general'|'downloads' }> = ({initialTab='general'}) => {
+ const {navigate,tracks}=useApp();
+ const [tab,setTab]=useState<'general'|'downloads'>(initialTab);
+ const [importOpen,setImportOpen]=useState(()=>new URLSearchParams(location.search).has('spotify'));
+ const [repair,setRepair]=useState(''),[busy,setBusy]=useState(false),[genres,setGenres]=useState<string|null>(null),[genreError,setGenreError]=useState('');
+ const [sounds,setSounds]=useState(uiSoundsEnabled);
+ useEffect(()=>{let active=true;void dbService.getSetting<any>('sonora:account:preferences',{}).then(v=>{if(active)setGenres((v.favouriteGenres||[]).join(', '));}).catch(()=>{if(active)setGenreError('Couldn’t load your listening preferences.');});return()=>{active=false;};},[]);
+ return <div id="settings-view" className="settings-page page-stack"><header className="flex items-center gap-3"><button className="player-icon outlined-icon" aria-label="Back to Home" onClick={()=>navigate({type:'home'})}><ArrowLeft size={22}/></button><div><p className="eyebrow">MAKE IT YOURS</p><h1 className="text-3xl font-semibold tracking-tight">Settings</h1></div></header>
+ <div role="tablist" aria-label="Settings sections" className="segmented-tabs"><button role="tab" aria-selected={tab==='general'} onClick={()=>setTab('general')}><SlidersHorizontal size={16}/><span>General</span></button><button role="tab" aria-selected={tab==='downloads'} onClick={()=>setTab('downloads')}><Download size={16}/><span>Downloads</span></button></div>
+ {tab==='downloads'?<div role="tabpanel" aria-label="Downloads"><DownloadsView/></div>:<div role="tabpanel" aria-label="General" className="section-stack">
+ <AppearanceCard/><AccountCard/><OfflineReadiness/><AudioCacheCard/>
+ <section className="settings-card"><h2>Listening preferences</h2><p>Tell us what you love. Your favorite genres help shape new discoveries.</p><label>Favorite genres<input aria-label="Favorite genres" value={genres??''} disabled={genres===null} onChange={e=>setGenres(e.target.value)} placeholder="R&B, soul, jazz…" className="settings-input" onBlur={async event=>{try{const value=event.target.value;const previous=await dbService.getSetting<any>('sonora:account:preferences',{});await dbService.setSetting('sonora:account:preferences',{...previous,favouriteGenres:value.split(',').map(v=>v.trim()).filter(Boolean),favouriteArtists:previous.favouriteArtists||[],vibes:previous.vibes||[],discovery:previous.discovery||'balanced',updatedAt:Date.now()});setGenreError('');window.dispatchEvent(new Event('sonora:preferences-changed'));notify('Listening preferences saved');}catch{setGenreError('Couldn’t save your preferences. Try again.');}}}/></label>{genreError&&<p role="alert">{genreError}</p>}</section>
+ <section className="settings-card"><div className="section-heading"><div><h2>Interaction sounds</h2><p>Subtle feedback for your actions.</p></div><button className="setting-switch" role="switch" aria-label="Interaction sounds" aria-checked={sounds} onClick={()=>{setUiSoundsEnabled(!sounds);setSounds(!sounds);}}><span/></button></div></section>
+ <section className="settings-card"><h2>Bring your playlists</h2><p>Import from Spotify, YouTube Music, or a playlist file. Keep your own names, covers, and additions.</p><button className="action-button" onClick={()=>setImportOpen(true)}>Import a playlist</button></section>
+ <section className="settings-card"><h2>Offline artwork</h2><p>Sharper covers, wherever you listen. Upgrade artwork for songs you’ve already downloaded.</p><button className="action-button" disabled={busy} onClick={async()=>{setBusy(true);setRepair('Saving covers…');try{const result=await repairDownloadedArtwork(tracks);setRepair('Updated '+result.saved+' covers.'+(result.failed?' '+result.failed+' could not be saved. Try again while connected.':''));}catch{setRepair('Could not update covers. Check your connection.');}finally{setBusy(false);}}}>{busy?'Updating…':'Upgrade downloaded covers'}</button>{repair&&<p role="status">{repair}</p>}</section>
+ <section className="settings-card"><h2>Make Sonora your app</h2><p>Add Sonora to your Home Screen for offline listening and lock-screen controls.</p><PWAInstallButton variant="banner"/></section>
+ <p className="settings-colophon">sonora. <span>A little more room for music.</span></p>
+ </div>}
+ <p className="made-by-enzo">made by enzo</p>
+ <ImportPlaylistModal isOpen={importOpen} onClose={()=>setImportOpen(false)}/></div>;
 };

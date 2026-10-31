@@ -1,21 +1,50 @@
 import express from 'express';
+import googleLibrary from './src/server/accounts/googleLibrary.js';
 import path from 'path';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
-import { DriveMusicService } from './src/server/drive/DriveMusicService.js';
-import { driveSessionStore } from './src/server/drive/DriveSessionStore.js';
 import youtubeApi from './src/server/ytmusic/api.js';
+import importRoutes from './src/server/import/importRoutes.js';
 import { chromiumBridge } from './src/server/bridge/ChromiumBridge.js';
-import { Readable } from 'stream';
 
 dotenv.config();
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
 const app = express();
 
+app.use('/api/account',googleLibrary);
 app.use(express.json());
 
-const driveMusicService = new DriveMusicService();
+// Temporary bounded diagnostic output for iOS PWA controls. Accept only known,
+// non-personal fields; keep at most 100 entries per server run.
+let controlReports = 0;
+app.post('/api/player-controls-diagnostic', (req, res) => {
+  const { build, event, details, standalone } = req.body || {};
+  if (!['track-controls-3', 'track-controls-4'].includes(build) || !['registered', 'command', 'unavailable', 'ended', 'play-error', 'playing', 'prepared', 'handoff', 'prepare-failed'].includes(event)) return res.sendStatus(400);
+  const allowedKeys = ['play', 'pause', 'seekto', 'seekbackward', 'seekforward', 'previoustrack', 'nexttrack', 'action', 'queued', 'error', 'source', 'visibility', 'prepared'];
+  const clean = Object.fromEntries(Object.entries(details || {}).filter(([key, value]) => allowedKeys.includes(key) && typeof value === 'string' && /^[a-zA-Z]{1,40}$/.test(value)));
+  if (controlReports++ < 100) console.log('[player-controls]', JSON.stringify({ time: new Date().toISOString(), build, event, standalone: standalone === true, details: clean }));
+  res.sendStatus(204);
+});
+
+
+app.get('/api/artwork', async (req, res) => {
+  try {
+    const url = new URL(String(req.query.url || ''));
+    if (url.protocol !== 'https:' || url.port || url.username || url.password || !/^((?:lh\d+|yt3)\.googleusercontent\.com|yt3\.ggpht\.com|i\.ytimg\.com)$/.test(url.hostname)) return res.sendStatus(400);
+    const image = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(10000) });
+    if (!image.ok) return res.sendStatus(404);
+    const type = image.headers.get('content-type') || '';
+    if (!type.startsWith('image/') || Number(image.headers.get('content-length')) > 8 * 1024 * 1024) return res.sendStatus(415);
+    const reader = image.body?.getReader();
+    if (!reader) return res.sendStatus(502);
+    const chunks: Uint8Array[] = []; let size = 0;
+    while (true) { const part = await reader.read(); if (part.done) break; size += part.value.length; if (size > 8 * 1024 * 1024) { await reader.cancel(); return res.sendStatus(413); } chunks.push(part.value); }
+    res.setHeader('Content-Type', type); res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.send(Buffer.concat(chunks));
+  } catch { res.sendStatus(502); }
+});
+
 
 app.get('/api/library', (_req, res) => {
   res.json({ tracks: [], albums: [], artists: [], trackCount: 0 });
@@ -30,152 +59,10 @@ app.get('/api/health', (req, res) => {
 });
 
 // ----------------------------------------------------
-// GOOGLE DRIVE AUDIO INTEGRATION ROUTES & SERVER-SIDE LOGIN
+// SONORA ACCOUNTS + PLAYLIST IMPORT ROUTES
 // ----------------------------------------------------
 
-// Get active server-side Google Drive login session
-app.get('/api/drive/session', (req, res) => {
-  const session = driveSessionStore.getSession();
-  if (session && session.accessToken) {
-    res.json({
-      connected: true,
-      user: session.user,
-      connectedAt: session.connectedAt,
-      lastUsedAt: session.lastUsedAt,
-    });
-  } else {
-    res.json({
-      connected: false,
-      user: null,
-    });
-  }
-});
-
-// Save or persist Google Drive login session on the server
-app.post('/api/drive/session', (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    const tokenFromHeader = authHeader?.replace(/^Bearer\s+/i, '').trim();
-    const accessToken = req.body?.accessToken || tokenFromHeader;
-    const user = req.body?.user;
-
-    if (!accessToken) {
-      return res.status(400).json({ error: 'accessToken is required to establish server session' });
-    }
-
-    const session = driveSessionStore.saveSession(accessToken, user);
-    res.json({
-      success: true,
-      connected: true,
-      user: session.user,
-      connectedAt: session.connectedAt,
-    });
-  } catch (err: any) {
-    console.error('Error saving drive session on server:', err);
-    res.status(500).json({ error: 'Failed to save drive session on server', details: err?.message });
-  }
-});
-
-// Remove or disconnect Google Drive session from the server
-app.delete('/api/drive/session', (req, res) => {
-  driveSessionStore.clearSession();
-  res.json({
-    success: true,
-    connected: false,
-  });
-});
-
-// Scan Google Drive audio files and extract metadata
-app.post('/api/drive/scan', async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    const tokenFromHeader = authHeader?.replace(/^Bearer\s+/i, '').trim();
-    const accessToken =
-      req.body?.accessToken ||
-      tokenFromHeader ||
-      driveSessionStore.getAccessToken();
-    const folderId = req.body?.folderId;
-
-    if (!accessToken) {
-      return res.status(401).json({
-        error: 'Google Drive access token is required. Please sign in with Google.',
-      });
-    }
-
-    const result = await driveMusicService.scanDriveMusic(accessToken, folderId);
-    res.json(result);
-  } catch (err: any) {
-    console.error('Error scanning Google Drive:', err);
-    res.status(500).json({
-      error: 'Failed to scan Google Drive audio files',
-      details: err?.message || String(err),
-    });
-  }
-});
-
-// Stream audio from Google Drive with full HTTP Range / scrubbing support
-app.get('/api/drive/stream/:fileId', async (req, res) => {
-  try {
-    const { fileId } = req.params;
-    const token =
-      (req.query.token as string) ||
-      req.headers.authorization?.replace(/^Bearer\s+/i, '').trim() ||
-      driveSessionStore.getAccessToken();
-
-    if (!fileId) {
-      return res.status(400).json({ error: 'fileId is required' });
-    }
-    if (!token) {
-      return res.status(401).json({ error: 'Access token required for Google Drive streaming' });
-    }
-
-    const rangeHeader = req.headers.range;
-    const driveHeaders: Record<string, string> = {
-      Authorization: `Bearer ${token}`,
-    };
-    if (rangeHeader) {
-      driveHeaders['Range'] = rangeHeader;
-    }
-
-    const driveRes = await fetch(
-      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
-      { headers: driveHeaders }
-    );
-
-    if (!driveRes.ok && driveRes.status !== 206) {
-      const errText = await driveRes.text();
-      return res.status(driveRes.status).send(errText);
-    }
-
-    res.status(driveRes.status);
-    const forwardHeaders = [
-      'content-range',
-      'content-length',
-      'content-type',
-      'accept-ranges',
-      'content-disposition',
-    ];
-    for (const [k, v] of driveRes.headers.entries()) {
-      if (forwardHeaders.includes(k.toLowerCase())) {
-        res.setHeader(k, v);
-      }
-    }
-    if (!res.getHeader('accept-ranges')) {
-      res.setHeader('accept-ranges', 'bytes');
-    }
-
-    if (driveRes.body) {
-      // @ts-ignore
-      const stream = Readable.fromWeb ? Readable.fromWeb(driveRes.body as any) : Readable.from(driveRes.body as any);
-      stream.pipe(res);
-    } else {
-      res.end();
-    }
-  } catch (err: any) {
-    console.error('Error streaming from Google Drive:', err);
-    res.status(500).json({ error: 'Failed to stream from Google Drive', details: err?.message });
-  }
-});
+app.use(importRoutes);
 
 // ----------------------------------------------------
 // YOUTUBE MUSIC INTEGRATION ROUTES
@@ -198,8 +85,20 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    // A new visit must see the current shell/worker. Versioned assets are precached
+    // by the service worker, which also handles offline document navigation.
+    app.use(express.static(distPath, {
+      setHeaders(res, filePath) {
+        if (/\.(?:html|webmanifest)$/.test(filePath) || /[\\/](?:sw|workbox-[^\\/]+)\.js$/.test(filePath)) {
+          res.setHeader('Cache-Control', 'no-cache');
+        }
+      },
+    }));
+    // Missing API/asset/worker URLs must not receive HTML disguised as a success.
+    app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
     app.get('*', (req, res) => {
+      if (path.extname(req.path)) return res.sendStatus(404);
+      res.setHeader('Cache-Control', 'no-cache');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

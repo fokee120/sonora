@@ -1,12 +1,12 @@
 import React from 'react';
-import { Heart, Play, Shuffle, Download, CheckCircle2 } from 'lucide-react';
+import { Heart, Play, Shuffle, Download, CheckCircle2, ArrowLeft } from 'lucide-react';
 import { useApp } from '../context/AppContext.js';
 import { usePlayer } from '../hooks/usePlayer.js';
 import { TrackRow } from '../components/common/TrackRow.js';
 import { offlineManager } from '../lib/offline/OfflineManager.js';
 
 export const LikedSongsView: React.FC = () => {
-  const { tracks, favorites, isOnline, downloadTrack } = useApp();
+  const { navigate, displayTracks: tracks, favorites, isOnline, downloadTrack } = useApp();
   const { playTrack, setQueue } = usePlayer();
 
   const likedTracks = tracks.filter((t) => favorites.has(t.id));
@@ -16,8 +16,11 @@ export const LikedSongsView: React.FC = () => {
 
   const handlePlayAll = (shuffle = false) => {
     if (likedTracks.length === 0) return;
-    setQueue(likedTracks, likedTracks[0]);
-    playTrack(likedTracks[0], likedTracks);
+    const queue = likedTracks.filter(track=>isOnline||offlineManager.isTrackDownloaded(track.id));
+    if(!queue.length)return;
+    if(shuffle)for(let i=queue.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[queue[i],queue[j]]=[queue[j],queue[i]];}
+    setQueue(queue, queue[0]);
+    playTrack(queue[0], queue);
   };
 
   const handleDownloadAll = async () => {
@@ -30,9 +33,10 @@ export const LikedSongsView: React.FC = () => {
 
   return (
     <div id="liked-songs-view" className="space-y-6 pb-12">
+      <button className="text-button" onClick={() => navigate({type:"library"})}><ArrowLeft size={17}/>Back to Library</button>
       {/* Hero */}
-      <div className="flex flex-col sm:flex-row items-center sm:items-end gap-6 p-6 rounded-3xl bg-gradient-to-b from-rose-950/40 via-zinc-900 to-zinc-950 border border-zinc-800/80 shadow-xl">
-        <div className="w-40 h-40 rounded-2xl bg-gradient-to-tr from-rose-600 via-rose-500 to-pink-500 flex items-center justify-center text-white shadow-2xl shrink-0">
+      <div className="collection-hero flex flex-col sm:flex-row items-center sm:items-end gap-6 p-6 rounded-3xl bg-gradient-to-b from-rose-950/40 via-zinc-900 to-zinc-950 border border-zinc-800/80 shadow-xl">
+        <div className="w-40 h-40 rounded-2xl bg-[#684c4b] flex items-center justify-center text-white shadow-2xl shrink-0">
           <Heart className="w-16 h-16 fill-white" />
         </div>
 
@@ -87,7 +91,7 @@ export const LikedSongsView: React.FC = () => {
       </div>
 
       {/* Tracks List */}
-      <div className="divide-y divide-zinc-900/60 rounded-2xl bg-zinc-900/20 border border-zinc-800/50 p-1">
+      <div className="song-list">
         {likedTracks.length === 0 ? (
           <div className="py-20 text-center text-zinc-500 text-xs">
             <p>You haven&apos;t liked any songs yet.</p>

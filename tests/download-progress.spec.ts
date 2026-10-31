@@ -10,7 +10,8 @@ async function setup(page: any) {
   }, track);
   await page.reload();
   await page.locator('#nav-library').click();
-  await expect(page.getByText(track.title).first()).toBeVisible();
+  await page.locator('#library-view').getByRole('tab', { name: 'Songs', exact: true }).click();
+  await expect(page.locator('#library-view').getByText(track.title, { exact: true })).toBeVisible();
 }
 async function state(page: any) {
   return page.evaluate(async id => {
@@ -31,7 +32,7 @@ test('reported direct transfer advances before headers, finalizing stays below 1
   });
   await page.evaluate(async track => { const p = '/src/lib/offline/OfflineManager.ts'; await (await import(p)).offlineManager.downloadTrack(track); }, track);
   await expect.poll(async () => (await state(page)).state?.progress).toBe(47);
-  const row = page.locator(`[id="track-row-${track.id}"]`).first();
+  const row = page.locator("#library-view").locator(`[id="track-row-${track.id}"]`).first();
   await expect(row.getByRole('status')).toContainText('Downloading audio file');
   await expect(row.getByRole('status')).toContainText('1.0 KB / 2.0 KB');
   await expect(row.getByRole('button', { name: 'Cancel download' })).toContainText('47%');

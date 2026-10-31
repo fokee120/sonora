@@ -9,3 +9,6 @@ playwright-report/
 .env*
 !.env.example
 .sonora/
+
+# Machine-specific Windows shortcuts
+*.lnk

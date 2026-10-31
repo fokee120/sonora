@@ -1,8 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { X, ListMusic, Plus, Search, Check, Sparkles, Youtube, Loader2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext.js';
 import { fetchYoutubeTrack } from '../../lib/ytmusic/youtubeMusic.js';
 import { playUiSound } from '../../lib/uiFeedback.js';
+import { Overlay } from '../common/Overlay.js';
 
 interface CreatePlaylistModalProps {
   isOpen: boolean;
@@ -39,6 +40,9 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
   const [isImportingYoutube, setIsImportingYoutube] = useState(false);
   const [youtubeInput, setYoutubeInput] = useState('');
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (isOpen && initialTrackId) setSelectedTrackIds(previous => new Set([...previous, initialTrackId]));
+  }, [isOpen, initialTrackId]);
 
   const filteredTracks = useMemo(() => {
     if (!searchQuery.trim()) return tracks.slice(0, 20);
@@ -50,8 +54,6 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
         (t.album && t.album.toLowerCase().includes(q))
     );
   }, [tracks, searchQuery]);
-
-  if (!isOpen) return null;
 
   const toggleTrack = (id: string) => {
     playUiSound('toggle');
@@ -140,10 +142,10 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+    <Overlay isOpen={isOpen} onClose={onClose} label="Create New Playlist">
       <div
         id="create-playlist-dialog"
-        className="w-full max-w-lg rounded-3xl bg-zinc-900 border border-zinc-800 shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-150"
+        className="min-h-0 flex flex-col overflow-hidden"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800/80 bg-zinc-950/40">
@@ -153,7 +155,7 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
             </div>
             <div>
               <h2 className="text-sm font-bold text-white">Create New Playlist</h2>
-              <p className="text-[11px] text-zinc-400">Add songs from your Google Drive audio library</p>
+              <p className="text-[11px] text-zinc-400">Choose songs for your playlist</p>
             </div>
           </div>
           <button
@@ -161,7 +163,7 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
               playUiSound('tap');
               onClose();
             }}
-            className="touch-target p-1.5 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition"
+            aria-label="Close create playlist" className="touch-target p-1.5 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition"
           >
             <X className="w-4 h-4" />
           </button>
@@ -207,33 +209,6 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
                 onChange={(e) => setDescription(e.target.value)}
                 className="w-full px-3.5 py-2 text-xs bg-zinc-950 border border-zinc-800 rounded-xl text-white placeholder:text-zinc-600 focus:outline-hidden focus:border-indigo-500 transition resize-none"
               />
-            </div>
-          </div>
-
-          {/* Theme Color Selection */}
-          <div>
-            <span className="block text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2 flex items-center gap-1.5">
-              <Sparkles className="w-3 h-3 text-indigo-400" />
-              <span>Cover Accent</span>
-            </span>
-            <div className="grid grid-cols-6 gap-2">
-              {PLAYLIST_THEMES.map((theme) => {
-                const isSelected = selectedTheme.id === theme.id;
-                return (
-                  <button
-                    key={theme.id}
-                    type="button"
-                onClick={() => setSelectedTheme(theme)}
-                    onMouseDown={() => playUiSound('toggle')}
-                    className={`h-9 rounded-xl bg-gradient-to-tr ${theme.gradient} transition relative flex items-center justify-center border ${
-                      isSelected ? 'border-white scale-105 shadow-md shadow-white/10 ring-2 ring-indigo-500/50' : 'border-transparent opacity-70 hover:opacity-100'
-                    }`}
-                    title={theme.name}
-                  >
-                    {isSelected && <Check className="w-3.5 h-3.5 text-white drop-shadow-md" />}
-                  </button>
-                );
-              })}
             </div>
           </div>
 
@@ -353,6 +328,6 @@ export const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({
           </button>
         </div>
       </div>
-    </div>
+    </Overlay>
   );
 };

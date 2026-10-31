@@ -13,6 +13,9 @@ export function setUiSoundsEnabled(enabled: boolean): void {
 
 export function playUiSound(kind: SoundKind = 'tap'): void {
   if (!uiSoundsEnabled()) return;
+  // A second audio session for a tap sound can compete with iOS music controls.
+  if (/iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) return;
   try {
     const Ctx = window.AudioContext || (window as any).webkitAudioContext;
     if (!Ctx) return;

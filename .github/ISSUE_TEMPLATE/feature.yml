@@ -1,0 +1,10 @@
+name: Feature request
+description: Suggest an improvement to Sonora
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to do?
+      description: Explain the situation and how the improvement would help.
+    validations:
+      required: true

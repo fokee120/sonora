@@ -1,5 +1,5 @@
+import {isServerOnline} from '../serverConnection.js';
 import type { Track } from '../../types/index.js';
-import { getDriveAccessToken } from '../googleAuth.js';
 import { isYoutubeTrack, youtubeVideoId } from '../ytmusic/youtubeMusic.js';
 import { createUuid } from '../uuid.js';
 
@@ -32,7 +32,7 @@ let prepareAgainAt = 0;
 /** Optional, silent warmup. Never request a song or wait for this before play. */
 export function prepareYoutubeBridge(): Promise<void> {
   if (prepareRequest) return prepareRequest;
-  if (!navigator.onLine || Date.now() < prepareAgainAt) return Promise.resolve();
+  if (!isServerOnline() || Date.now() < prepareAgainAt) return Promise.resolve();
   // Cool down failures too, including deployments without this optional API.
   prepareAgainAt = Date.now() + 30_000;
   const controller = new AbortController();
@@ -51,10 +51,6 @@ export function prepareYoutubeBridge(): Promise<void> {
   return prepareRequest;
 }
 
-export function isDriveTrack(track: Track): boolean {
-  return track.id.startsWith('gdrive:') || track.cloudKey.startsWith('gdrive://');
-}
-
 export function youtubeStreamUrl(track: Track, start = 0): string {
   const videoId = youtubeVideoId(track);
   if (!/^[\w-]{11}$/.test(videoId)) throw new Error('Invalid YouTube track. Search for it again.');
@@ -69,50 +65,15 @@ export function youtubeDownloadUrl(track: Track): string {
   return `/api/ytmusic/download/${encodeURIComponent(videoId)}?session=${encodeURIComponent(getBridgeSessionId())}`;
 }
 
-export function driveMediaUrl(track: Track): string {
-  const fileId = track.id.startsWith('gdrive:')
-    ? track.id.slice(7)
-    : track.cloudKey.slice(9).split('/')[0];
-  if (!/^[\w-]+$/.test(fileId)) throw new Error('Invalid Google Drive file ID. Rescan your library.');
-  return `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`;
-}
-
-export async function responseError(response: Response, fallback: string): Promise<Error> {
-  if (response.status === 401) return new Error('Google Drive authorization expired. Disconnect and sign in with Google again.');
-  let detail = '';
-  try {
-    const data = await response.json();
-    detail = typeof data.error === 'string' ? data.error : data.error?.message || '';
-  } catch {
-    // Vercel errors can be plain text rather than JSON.
-  }
-  return new Error(`${fallback} (${response.status})${detail ? `: ${detail}` : ''}`);
-}
-
-export async function fetchDriveAudio(track: Track, options: RequestInit = {}): Promise<Response> {
-  const token = getDriveAccessToken();
-  if (!token || token === 'server-active-token') {
-    throw new Error('Connect Google Drive on this device before playing or downloading.');
-  }
-  const headers = new Headers(options.headers);
-  headers.set('Authorization', `Bearer ${token}`);
-  const response = await fetch(driveMediaUrl(track), {
-    ...options, headers, credentials: 'omit', cache: 'no-store',
-  });
-  if (!response.ok) throw await responseError(response, 'Google Drive could not read this audio file');
-  return response;
-}
-
-export async function fetchTrackAudio(track: Track, signal?: AbortSignal, onProgress?: (state: { phase: 'preparing' | 'recording' | 'fetching' | 'finalizing'; progress: number; recordedSeconds: number; sourceDuration: number; sourceBytesDownloaded?: number; sourceTotalBytes?: number }) => Promise<void>): Promise<Response> {
+export async function fetchTrackAudio(track: Track, signal?: AbortSignal, onProgress?: (state: { phase: 'preparing' | 'recording' | 'fetching' | 'finalizing' | 'waiting_transfer'; progress: number; recordedSeconds: number; sourceDuration: number; sourceBytesDownloaded?: number; sourceTotalBytes?: number }) => Promise<void>): Promise<Response> {
   if (isYoutubeTrack(track)) {
     return fetchYoutubeAudio(track, signal, true, onProgress);
   }
-  if (isDriveTrack(track)) return fetchDriveAudio(track, { signal });
-  throw new Error('This legacy cloud source is no longer supported. Import the song from Google Drive or search YouTube Music to retry.');
+  throw new Error('Search for this song again to stream or download it. Saved local audio remains playable.');
 }
 
 /** A single full GET avoids unsupported Range requests while the audio backend transcodes MP3. */
-export async function fetchYoutubeAudio(track: Track, signal?: AbortSignal, download = false, onProgress?: (state: { phase: 'preparing' | 'recording' | 'fetching' | 'finalizing'; progress: number; recordedSeconds: number; sourceDuration: number; sourceBytesDownloaded?: number; sourceTotalBytes?: number }) => Promise<void>): Promise<Response> {
+export async function fetchYoutubeAudio(track: Track, signal?: AbortSignal, download = false, onProgress?: (state: { phase: 'preparing' | 'recording' | 'fetching' | 'finalizing' | 'waiting_transfer'; progress: number; recordedSeconds: number; sourceDuration: number; sourceBytesDownloaded?: number; sourceTotalBytes?: number }) => Promise<void>): Promise<Response> {
   const metadata = new URLSearchParams({ title: track.title, artist: track.artist, duration: String(track.duration || 0) });
   const polling = new AbortController();
   const requestId = download && onProgress ? createUuid() : undefined;
@@ -121,14 +82,14 @@ export async function fetchYoutubeAudio(track: Track, signal?: AbortSignal, down
   signal?.addEventListener('abort', cancelPolling, { once: true });
   if (signal?.aborted) cancelPolling();
   let response: Response;
-  const pending = fetch(`${download ? youtubeDownloadUrl(track) : youtubeStreamUrl(track)}&${metadata}`, { signal, cache: 'no-store' });
+  const pending = fetch(`${download ? youtubeDownloadUrl(track) : youtubeStreamUrl(track)}&${metadata}`, {signal,cache:'no-store'});
   const monitor = requestId ? (async () => {
     while (!polling.signal.aborted) {
       try {
         const status = await fetch(`/api/ytmusic/download-status/${requestId}?session=${encodeURIComponent(getBridgeSessionId())}`, { signal: polling.signal, cache: 'no-store' });
         if (status.ok) {
           const state = await status.json();
-          if (!polling.signal.aborted && ['preparing', 'recording', 'fetching', 'finalizing'].includes(state.phase) && Number.isFinite(state.progress)) {
+          if (!polling.signal.aborted && ['preparing', 'recording', 'fetching', 'finalizing', 'waiting_transfer'].includes(state.phase) && Number.isFinite(state.progress)) {
             await onProgress!({
               phase: state.phase,
               progress: Math.min(95, Math.max(0, state.progress)),

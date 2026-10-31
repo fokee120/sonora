@@ -1,0 +1,1 @@
+import {defineConfig} from '@playwright/test';import base from './playwright.row-local.config';export default defineConfig({...base,testMatch:['**/viewport-width.spec.ts'],outputDir:'.sonora/test-results/viewport-width'});

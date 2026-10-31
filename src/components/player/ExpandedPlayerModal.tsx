@@ -1,396 +1,79 @@
-import React, { useRef, useState } from 'react';
-import {
-  ChevronDown,
-  Play,
-  Pause,
-  SkipBack,
-  SkipForward,
-  Shuffle,
-  Repeat,
-  Repeat1,
-  Volume2,
-  VolumeX,
-  Heart,
-  HardDriveDownload,
-  Cloud,
-  FileText,
-  ListMusic,
-  Download,
-  CheckCircle2,
-  Loader2,
-} from 'lucide-react';
+import React, { useState, useContext, useMemo, useEffect } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import { ChevronDown, FileText, ListMusic, ListPlus, Loader2 } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Repeat1, Heart } from '../common/ThemeIcons.js';
+import { artistRoute } from '../../lib/ytmusic/catalog.js';
+import { PlayerMotionContext } from './PlayerMotionContext.js';
 import { usePlayer } from '../../hooks/usePlayer.js';
 import { useApp } from '../../context/AppContext.js';
-import { playUiSound } from '../../lib/uiFeedback.js';
+import { Overlay } from '../common/Overlay.js';
+import { SeekBar } from './SeekBar.js';
+import {useSongLyrics} from '../../lib/lyrics.js';
+import {LyricsPanel} from './LyricsPanel.js';
+import {RetroArcade} from './RetroArcade.js';
+import {ScrollingTitle} from './ScrollingTitle.js';
+import { TrackSlide } from './TrackSlide.js';
+import {AddToPlaylistSheet} from '../playlist/AddToPlaylistSheet.js';
+import type {Track} from '../../types/index.js';
+import { notify } from '../common/ToastHost.js';
+import { useAppearance } from '../../lib/appearance.js';
+import { Artwork } from '../common/Artwork.js';
 
-interface ExpandedPlayerModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onOpenQueue: () => void;
-}
-
-export const ExpandedPlayerModal: React.FC<ExpandedPlayerModalProps> = ({
-  isOpen,
-  onClose,
-  onOpenQueue,
-}) => {
-  const {
-    currentTrack,
-    isPlaying,
-    togglePlay,
-    next,
-    previous,
-    seek,
-    currentTime,
-    duration,
-    volume,
-    setVolume,
-    isMuted,
-    toggleMute,
-    shuffle,
-    toggleShuffle,
-    repeatMode,
-    cycleRepeatMode,
-    playbackSource,
-    isLoading,
-    error,
-  } = usePlayer();
-
-  const { isFavorite, toggleFavorite, isDownloaded, downloadTrack, removeDownload } = useApp();
-  const [showLyrics, setShowLyrics] = useState(false);
-  const touchStart = useRef<{ x: number; y: number } | null>(null);
-
-  if (!isOpen || !currentTrack) return null;
-
+interface Props { isOpen: boolean; onClose: () => void; onOpenQueue: () => void; }
+export const ExpandedPlayerModal: React.FC<Props> = ({ isOpen, onClose, onOpenQueue }) => {
+  const { playlistId,playlistProfileId,currentTrack, isPlaying, isLoading, error, togglePlay, next, previous, shuffle, toggleShuffle, repeatMode, cycleRepeatMode, playbackSource } = usePlayer({progress:false});
+  const { navigate, isFavorite, toggleFavorite, addTracksToLibrary } = useApp();
+  const dragX = useContext(PlayerMotionContext);
+  const {style: themeStyle} = useAppearance();
+  const [lyrics, setLyrics] = useState(false);
+  const [playlistTrack,setPlaylistTrack]=useState<Track|null>(null);
+  useEffect(()=>{if(!isOpen)setPlaylistTrack(null);},[isOpen]);
+  const songLyrics=useSongLyrics(currentTrack,isOpen);
+  useEffect(()=>setLyrics(false),[currentTrack?.id,isOpen]);
+  const artworkTilt = useMemo(() => (Math.random() < .5 ? -1 : 1) * (1 + Math.random() * 3), [currentTrack?.id]);
+  if (!currentTrack) return null;
   const favorite = isFavorite(currentTrack.id);
-  const downloaded = isDownloaded(currentTrack.id);
-
-  const formatTime = (secs: number) => {
-    if (!secs || isNaN(secs)) return '0:00';
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
-  };
-
-  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
-  const volumePercent = (isMuted ? 0 : volume) * 100;
-
-  const handleTouchEnd = (e: React.TouchEvent) => {
-    const start = touchStart.current;
-    touchStart.current = null;
-    if (!start) return;
-    const touch = e.changedTouches[0];
-    const dx = touch.clientX - start.x;
-    const dy = touch.clientY - start.y;
-    if (Math.abs(dy) > 90 && dy > Math.abs(dx) * 1.2) {
-      playUiSound('tap');
-      onClose();
-      return;
-    }
-    if (Math.abs(dx) > 80 && Math.abs(dx) > Math.abs(dy) * 1.3) {
-      playUiSound('tap');
-      if (dx < 0) next();
-      else previous();
-    }
-  };
-
-  return (
-    <div
-      id="expanded-player-modal"
-      className="player-sheet-in fixed inset-0 z-50 flex flex-col bg-[#050505]/95 backdrop-blur-2xl p-6 sm:p-10 select-none overflow-y-auto text-white relative touch-pan-y"
-      onTouchStart={(e) => {
-        const touch = e.touches[0];
-        touchStart.current = { x: touch.clientX, y: touch.clientY };
-      }}
-      onTouchEnd={handleTouchEnd}
-    >
-      {/* Ambient background bloom */}
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          background:
-            'radial-gradient(circle at 50% 30%, rgba(59,130,246,0.12) 0%, transparent 60%), radial-gradient(circle at 80% 80%, rgba(147,51,234,0.08) 0%, transparent 50%)',
-        }}
-      />
-
-      {/* Top Header */}
-      <div className="relative z-10 flex items-center justify-between max-w-2xl w-full mx-auto pb-4">
-        <button
-          onClick={() => {
-            playUiSound('tap');
-            onClose();
-          }}
-          className="touch-target p-2 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition"
-          title="Minimize player"
-        >
-          <ChevronDown className="w-6 h-6" />
-        </button>
-
-        <div className="text-center">
-          <span className="text-[10px] font-semibold uppercase tracking-widest text-zinc-400 block">
-            Playing From {playbackSource === 'local' ? 'Offline Cache' : 'Cloud Storage'}
-          </span>
-          <p className="text-xs font-medium text-zinc-300 truncate max-w-xs">{currentTrack.album}</p>
-        </div>
-
-        <button
-          onClick={() => {
-            playUiSound('toggle');
-            setShowLyrics(!showLyrics);
-          }}
-          className={`touch-target p-2 rounded-xl border text-xs font-medium transition flex items-center gap-1.5 ${
-            showLyrics
-              ? 'bg-blue-600 text-white border-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.5)]'
-              : 'bg-white/5 border-white/10 text-zinc-400 hover:text-white'
-          }`}
-          title="Toggle lyrics view"
-        >
-          <FileText className="w-4 h-4" />
-          <span className="hidden sm:inline">Lyrics</span>
-        </button>
+  return <Overlay isOpen={isOpen} onClose={onClose} label="Now playing" id="expanded-player-modal" variant="player">
+    {themeStyle === 'gotham' ? <div className="gotham-player-scene" aria-hidden="true"><div className="gotham-rain"><i/><i/></div></div> : <div className="player-ambience" aria-hidden="true"><Artwork track={currentTrack} /></div>}
+    <div className={'now-playing-content'+(songLyrics?' has-lyrics':'')}><div className="player-primary-panel">
+      <header className="now-playing-header">
+        <button className="player-icon" title="Minimize player" onClick={onClose}><ChevronDown size={26} /></button>
+        <div><p>NOW PLAYING</p><span>{playbackSource === 'local' ? 'Playing from this device' : 'In your own world'}</span></div>
+        {songLyrics?<button className="player-icon" title="Open lyrics" onClick={()=>setLyrics(true)}><FileText size={20}/></button>:<span className="player-header-spacer"/>}
+      </header>
+      {themeStyle==='retro'&&<RetroArcade playing={isPlaying}/> }
+      <div className="player-art-stage">
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div key="artwork" className="player-artwork" style={{'--artwork-tilt': artworkTilt + 'deg'} as React.CSSProperties}><TrackSlide expanded /></motion.div>
+        </AnimatePresence>
       </div>
-
-      {/* Main Content Area: Artwork or Lyrics */}
-      <div className="relative z-10 flex-1 flex flex-col items-center justify-center max-w-md w-full mx-auto my-4 min-h-[260px]">
-        {showLyrics ? (
-          <div className="w-full h-80 glass-card rounded-2xl p-6 overflow-y-auto text-sm leading-relaxed text-zinc-300 font-sans shadow-inner">
-            <h3 className="text-xs uppercase font-bold text-blue-400 tracking-wider mb-3">Lyrics</h3>
-            {currentTrack.lyrics ? (
-              <p className="whitespace-pre-line text-zinc-200">{currentTrack.lyrics}</p>
-            ) : (
-              <p className="text-zinc-500 italic py-12 text-center">
-                No embedded lyrics found for this track.
-              </p>
-            )}
-          </div>
-        ) : (
-          <div className="relative w-64 h-64 sm:w-80 sm:h-80 rounded-3xl overflow-hidden shadow-2xl shadow-black/90 border border-white/10 bg-zinc-950">
-            <img
-              src={currentTrack.artworkUrl || '/icon.svg'}
-              alt={currentTrack.album}
-              className="w-full h-full object-cover"
-              decoding="async"
-              onError={(e) => {
-                (e.target as HTMLImageElement).src = '/icon.svg';
-              }}
-            />
-            {/* Playback Source Badge */}
-            <div className="absolute top-3 right-3 flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium backdrop-blur-md bg-black/70 border border-white/15 text-white shadow-md">
-              {playbackSource === 'local' ? (
-                <>
-                  <HardDriveDownload className="w-3.5 h-3.5 text-emerald-400" />
-                  <span className="text-emerald-300">Offline Blob</span>
-                </>
-              ) : (
-                <>
-                  <Cloud className="w-3.5 h-3.5 text-blue-400" />
-                  <span className="text-blue-300">Legacy source</span>
-                </>
-              )}
-            </div>
-          </div>
-        )}
+      <div className="player-song-heading">
+        <motion.div className="player-track-label" style={dragX ? {x:dragX} : undefined}><AnimatePresence initial={false} mode="popLayout"><motion.div key={currentTrack.id} initial={{ opacity: 0, x: 22 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -22 }} transition={{ duration: .28 }}>{playlistId?<h1><button className="expanded-title-link" aria-label={'Open source playlist for '+currentTrack.title} onClick={()=>{onClose();navigate({type:'playlist',id:playlistId,...(playlistProfileId?{profileId:playlistProfileId}:{})});}}><ScrollingTitle text={currentTrack.title}/></button></h1>:<ScrollingTitle as="h1" text={currentTrack.title}/>}<button className="expanded-artist-link" onClick={()=>{onClose();navigate(artistRoute(currentTrack));}}>{currentTrack.artist}</button></motion.div></AnimatePresence></motion.div>
+        <motion.button whileTap={{ scale: 0.8 }} className="player-icon" title={favorite ? 'Unlike song' : 'Like song'} aria-pressed={favorite} onClick={() => void addTracksToLibrary([currentTrack]).then(() => toggleFavorite(currentTrack.id)).then(() => notify(favorite ? "Removed from liked songs" : "Saved to liked songs")).catch(() => notify("Couldn’t save this song.", true))}>
+          <Heart size={25} fill={favorite ? 'currentColor' : 'none'} />
+        </motion.button>
       </div>
-
-      {/* Track Info & Actions */}
-      <div className="relative z-10 max-w-md w-full mx-auto space-y-5">
-        <div className="flex items-center justify-between">
-          <div className="min-w-0 flex-1 pr-4">
-            <h2 className="text-xl font-bold text-white truncate tracking-tight">
-              {currentTrack.title}
-            </h2>
-            <p className="text-sm text-zinc-400 truncate mt-0.5">{currentTrack.artist}</p>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                playUiSound(downloaded ? 'toggle' : 'download');
-                downloaded ? removeDownload(currentTrack.id) : downloadTrack(currentTrack);
-              }}
-              className={`touch-target p-2.5 rounded-full border transition active:scale-90 ${
-                downloaded
-                  ? 'bg-emerald-950/60 border-emerald-800/60 text-emerald-400'
-                  : 'bg-white/5 border-white/10 text-zinc-400 hover:text-white'
-              }`}
-              title={downloaded ? 'Downloaded to IndexedDB' : 'Download for offline playback'}
-            >
-              {downloaded ? <CheckCircle2 className="w-5 h-5" /> : <Download className="w-5 h-5" />}
-            </button>
-
-            <button
-              onClick={() => {
-                playUiSound(favorite ? 'toggle' : 'success');
-                toggleFavorite(currentTrack.id);
-              }}
-              className={`touch-target p-2.5 rounded-full border transition active:scale-90 ${
-                favorite
-                  ? 'bg-rose-950/60 border-rose-800/60 text-rose-500'
-                  : 'bg-white/5 border-white/10 text-zinc-400 hover:text-white'
-              }`}
-              title={favorite ? 'Liked' : 'Like'}
-            >
-              <Heart className={`w-5 h-5 ${favorite ? 'fill-rose-500' : ''}`} />
-            </button>
-          </div>
-        </div>
-
-        {/* Progress Bar with seeking */}
-        {error && <p role="alert" className="text-xs text-rose-300 break-words">{error}</p>}
-        {isLoading && <p role="status" className="text-xs text-zinc-400">{isPlaying ? 'Buffering…' : 'Loading audio…'}</p>}
-        <div className="space-y-1.5">
-          <div
-            className="relative w-full h-2 bg-white/10 rounded-full cursor-pointer group"
-            role="slider"
-            tabIndex={duration > 0 ? 0 : -1}
-            aria-label="Seek"
-            aria-valuemin={0}
-            aria-valuemax={duration}
-            aria-valuenow={Math.min(currentTime, duration)}
-            aria-valuetext={formatTime(currentTime)}
-            onKeyDown={(e) => {
-              if (!duration) return;
-              const position = e.key === 'Home' ? 0 : e.key === 'End' ? duration
-                : e.key === 'ArrowRight' ? currentTime + 5 : e.key === 'ArrowLeft' ? currentTime - 5 : null;
-              if (position !== null) { e.preventDefault(); seek(position); }
-            }}
-            onClick={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              const pct = (e.clientX - rect.left) / rect.width;
-              seek(pct * duration);
-            }}
-          >
-            <div
-              className="h-full bg-blue-500 group-hover:bg-blue-400 rounded-full transition-all shadow-[0_0_12px_rgba(59,130,246,0.6)]"
-              style={{ width: `${progressPercent}%` }}
-            />
-          </div>
-          <div className="flex justify-between text-xs font-mono text-zinc-500">
-            <span>{formatTime(currentTime)}</span>
-            <span>{formatTime(duration)}</span>
-          </div>
-        </div>
-
-        {/* Playback Controls */}
-        <div className="flex items-center justify-between py-2">
-          {/* Shuffle */}
-          <button
-            onClick={() => {
-              playUiSound('toggle');
-              toggleShuffle();
-            }}
-            className={`touch-target p-2 rounded-full transition ${
-              shuffle ? 'text-blue-400 bg-blue-500/10' : 'text-zinc-500 hover:text-white'
-            }`}
-            title={`Shuffle: ${shuffle ? 'On' : 'Off'}`}
-          >
-            <Shuffle className="w-5 h-5" />
-          </button>
-
-          {/* Previous */}
-          <button
-            onClick={() => {
-              playUiSound('tap');
-              previous();
-            }}
-            className="touch-target p-3 rounded-full text-zinc-300 hover:text-white hover:bg-white/5 transition active:scale-90"
-            title="Previous track"
-          >
-            <SkipBack className="w-6 h-6 fill-current" />
-          </button>
-
-          {/* Play/Pause Main Button */}
-          <button
-            onClick={() => {
-              playUiSound('tap');
-              togglePlay();
-            }}
-            className="w-16 h-16 rounded-full bg-white text-zinc-950 flex items-center justify-center hover:scale-105 active:scale-95 transition shadow-2xl"
-            title={isLoading ? 'Cancel loading' : isPlaying ? 'Pause' : error ? 'Retry playback' : 'Play'}
-            aria-label={isLoading ? 'Cancel loading' : isPlaying ? 'Pause' : error ? 'Retry playback' : 'Play'}
-          >
-            {isLoading ? <Loader2 className="w-7 h-7 animate-spin" /> : isPlaying ? (
-              <Pause className="w-7 h-7 fill-current" />
-            ) : (
-              <Play className="w-7 h-7 fill-current ml-1" />
-            )}
-          </button>
-
-          {/* Next */}
-          <button
-            onClick={() => {
-              playUiSound('tap');
-              next();
-            }}
-            className="touch-target p-3 rounded-full text-zinc-300 hover:text-white hover:bg-white/5 transition active:scale-90"
-            title="Next track"
-          >
-            <SkipForward className="w-6 h-6 fill-current" />
-          </button>
-
-          {/* Repeat */}
-          <button
-            onClick={() => {
-              playUiSound('toggle');
-              cycleRepeatMode();
-            }}
-            className={`touch-target p-2 rounded-full transition ${
-              repeatMode !== 'off'
-                ? 'text-blue-400 bg-blue-500/10'
-                : 'text-zinc-500 hover:text-white'
-            }`}
-            title={`Repeat: ${repeatMode}`}
-          >
-            {repeatMode === 'one' ? (
-              <Repeat1 className="w-5 h-5" />
-            ) : (
-              <Repeat className="w-5 h-5" />
-            )}
-          </button>
-        </div>
-
-        {/* Volume & Queue Bottom Bar */}
-        <div className="flex items-center justify-between pt-2 border-t border-white/5">
-          <div className="flex items-center gap-2 flex-1 max-w-[180px]">
-            <button
-              onClick={() => {
-                playUiSound('toggle');
-                toggleMute();
-              }}
-              className="touch-target p-1.5 text-zinc-400 hover:text-white"
-              title="Mute / Unmute"
-            >
-              {isMuted || volume === 0 ? (
-                <VolumeX className="w-4 h-4 text-zinc-600" />
-              ) : (
-                <Volume2 className="w-4 h-4" />
-              )}
-            </button>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={isMuted ? 0 : volume}
-              onChange={(e) => setVolume(parseFloat(e.target.value))}
-              style={{ '--range-progress': `${volumePercent}%` } as React.CSSProperties}
-              className="range-progress w-full cursor-pointer"
-            />
-          </div>
-
-          <button
-              onClick={() => {
-              playUiSound('tap');
-              onClose();
-              onOpenQueue();
-            }}
-            className="touch-target flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-xs font-medium text-zinc-300 border border-white/10 transition"
-          >
-            <ListMusic className="w-4 h-4 text-blue-400" />
-            <span>Queue</span>
-          </button>
+      <div className="player-timeline"><SeekBar />
+        <div className="player-status" aria-live="polite">
+          {error ? <p role="alert">{error}</p> : isLoading ? <p role="status">{isPlaying ? 'Buffering…' : 'Loading audio…'}</p> : null}
         </div>
       </div>
+      <div className="player-transport">
+        <button className="player-icon" title={`Shuffle: ${shuffle ? 'On' : 'Off'}`} aria-pressed={shuffle} onClick={toggleShuffle}><Shuffle size={22} /></button>
+        <button className="player-icon" title="Previous track" onClick={previous}><SkipBack size={30} fill="currentColor" /></button>
+        <motion.button whileTap={{ scale: 0.9 }} className="player-main-play" onClick={togglePlay} aria-label={isLoading ? 'Cancel loading' : isPlaying ? 'Pause' : error ? 'Retry playback' : 'Play'}>
+          {isLoading ? <Loader2 size={31} className="animate-spin" /> : isPlaying ? <Pause size={31} fill="currentColor" /> : <Play size={31} fill="currentColor" />}
+        </motion.button>
+        <button className="player-icon" title="Next track" onClick={next}><SkipForward size={30} fill="currentColor" /></button>
+        <button className="player-icon" title={`Repeat: ${repeatMode}`} aria-pressed={repeatMode !== 'off'} onClick={cycleRepeatMode}>{repeatMode === 'one' ? <Repeat1 size={22} /> : <Repeat size={22} />}</button>
+      </div>
+      <footer className="player-footer">
+        <button className="player-icon" title="Add to playlist" onClick={()=>setPlaylistTrack(currentTrack)}><ListPlus size={21}/><span>Add to playlist</span></button>
+        <button className="player-icon" title="Queue" onClick={() => { onClose(); onOpenQueue(); }}><ListMusic size={21}/><span>Up next</span></button>
+      </footer></div>
+      {songLyrics&&<button className="lyrics-preview" onClick={()=>setLyrics(true)}><span className="eyebrow">{songLyrics.lines.length?'TIME-SYNCED LYRICS':'LYRICS'}</span><strong>{songLyrics.plain.split('\n').filter(Boolean).slice(0,2).join('\n')}</strong><span>Open lyrics</span></button>}
     </div>
-  );
+    {playlistTrack&&<AddToPlaylistSheet track={playlistTrack} isOpen onClose={()=>setPlaylistTrack(null)}/>}
+    <Overlay isOpen={lyrics&&!!songLyrics} onClose={()=>setLyrics(false)} label="Lyrics">{songLyrics&&<LyricsPanel lyrics={songLyrics} title={currentTrack.title} onClose={()=>setLyrics(false)}/>}</Overlay>
+  </Overlay>;
 };
