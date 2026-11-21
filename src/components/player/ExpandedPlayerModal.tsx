@@ -5,7 +5,7 @@ import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { ChevronDown, FileText, ListMusic, ListPlus, Loader2 } from 'lucide-react';
 import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Repeat1, Heart } from '../common/ThemeIcons.js';
-import { artistRoute } from '../../lib/ytmusic/catalog.js';
+import { albumRoute, artistRoute } from '../../lib/ytmusic/catalog.js';
 import { usePlayer } from '../../hooks/usePlayer.js';
 import { useApp } from '../../context/AppContext.js';
 import { Overlay } from '../common/Overlay.js';
@@ -52,8 +52,12 @@ export const ExpandedPlayerModal: React.FC<Props> = ({ isOpen, onClose, onOpenQu
   if (!currentTrack) return null;
   const favorite = isFavorite(currentTrack.id);
   const comics = themeStyle === 'comics';
+  const hasAlbum = currentTrack.albumId || (currentTrack.album?.trim() && !['YouTube Music', 'YouTube Video'].includes(currentTrack.album));
   const cover = <div className="player-artwork" style={{'--artwork-tilt': artworkTilt + 'deg'} as React.CSSProperties}>
     <TrackSlide track={currentTrack} expanded onArtworkLoad={artworkLoaded}/>
+    {hasAlbum && <button type="button" className="player-cover-link" data-player-cover-link
+      aria-label={currentTrack.album ? 'Open album ' + currentTrack.album : 'Open album'}
+      onClick={() => { onClose(); navigate(albumRoute(currentTrack)); }} />}
   </div>;
   const title = comics
     ? <span className="comic-song-title" title={currentTrack.title}>{currentTrack.title}</span>

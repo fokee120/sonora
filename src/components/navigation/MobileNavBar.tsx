@@ -31,7 +31,9 @@ export const MobileNavBar: React.FC = () => {
     >
       {items.map((item) => {
         const Icon = item.icon;
-        const isActive = route.type === item.type || (item.type === 'library' && ['album', 'albums', 'artist', 'artists', 'playlists', 'playlist', 'liked'].includes(route.type));
+        const isActive = route.type === item.type
+          || (item.type === 'search' && ['artist', 'artists'].includes(route.type))
+          || (item.type === 'library' && ['album', 'albums', 'playlists', 'playlist', 'liked'].includes(route.type));
         return (
           <motion.button
             key={item.type}

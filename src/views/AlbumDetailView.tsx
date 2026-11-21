@@ -7,15 +7,13 @@ import { Artwork } from '../components/common/Artwork.js';
 import { SaveAlbumSheet } from '../components/playlist/SaveAlbumSheet.js';
 import { notify } from '../components/common/ToastHost.js';
 import { offlineManager } from '../lib/offline/OfflineManager.js';
-import { getCatalogPage, resolveAlbum, pageAlbum, artistRoute, type CatalogPage } from '../lib/ytmusic/catalog.js';
+import { getCatalogPage, getRecentAlbumPage, mergeCatalogPages, resolveAlbum, pageAlbum, artistRoute, type CatalogPage } from '../lib/ytmusic/catalog.js';
 import type { Album } from '../types/index.js';
 
 export const AlbumDetailView: React.FC<{ albumId: string }> = ({ albumId }) => {
   const { route, displayAlbums, displayTracks, navigate, isOnline, downloadAlbum, removeAlbumDownload, isDownloaded } = useApp();
   const { playTrack } = usePlayer();
   const [saveOpen, setSaveOpen] = useState(false);
-  const [page, setPage] = useState<CatalogPage | null>(null);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
   const [moreBusy, setMoreBusy] = useState(false);
@@ -30,15 +28,18 @@ export const AlbumDetailView: React.FC<{ albumId: string }> = ({ albumId }) => {
   const { title, artist } = hint;
   const stored = displayAlbums.find(item => item.id === albumId);
   const storedId = stored?.id;
+  const [page, setPage] = useState(() => getRecentAlbumPage(albumId, title, artist));
+  const [loading, setLoading] = useState(!storedId && !page);
 
   useEffect(() => {
-    const controller = new AbortController();
-    setPage(null);
     setError('');
-    if (storedId) {
+    const recent = storedId ? null : getRecentAlbumPage(albumId, title, artist);
+    setPage(recent);
+    if (storedId || recent) {
       setLoading(false);
       return;
     }
+    const controller = new AbortController();
     setLoading(true);
     void (async () => {
       try {
@@ -74,8 +75,7 @@ export const AlbumDetailView: React.FC<{ albumId: string }> = ({ albumId }) => {
 
   const nextPage = async (current: CatalogPage) => {
     const next = await getCatalogPage(current.browseId, undefined, current.continuation);
-    const songs = [...new Map([...current.songs, ...next.songs].map(song => [song.videoId, song])).values()];
-    return { ...current, songs, continuation: next.continuation };
+    return mergeCatalogPages(current, next);
   };
 
   const loadAlbum = async () => {

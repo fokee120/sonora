@@ -175,8 +175,7 @@ export const dbService = {
   },
 
   async deleteAlbum(id: string): Promise<void> {
-    const db = await getDB();
-    await db.delete('albums', id);
+    await dbService.removeLibraryItems('albums', [id]);
   },
 
   // Artists
@@ -277,8 +276,14 @@ export const dbService = {
   },
 
   async deletePlaylist(id: string): Promise<void> {
+    await dbService.removeLibraryItems('playlists', [id]);
+  },
+
+  async removeLibraryItems(collection: 'playlists' | 'albums', ids: readonly string[]): Promise<void> {
+    if (!ids.length) return;
     const db = await getDB();
-    await db.delete('playlists', id);
+    const tx = db.transaction(collection, 'readwrite');
+    await Promise.all([...ids.map(id => tx.store.delete(id)), tx.done]);
   },
 
   // Favorites
@@ -354,7 +359,7 @@ export const dbService = {
 };
 
 // Notify account sync after committed metadata writes; audio bytes remain device-local.
-for(const method of ['saveTracks','saveAlbums','deleteAlbum','savePlaylist','mutatePlaylist','deletePlaylist','addFavorite','removeFavorite','addHistory','setSetting'] as const){
+for(const method of ['saveTracks','saveAlbums','savePlaylist','mutatePlaylist','removeLibraryItems','addFavorite','removeFavorite','addHistory','setSetting'] as const){
  const original=(dbService as any)[method];
  (dbService as any)[method]=async function(...args:any[]){const result=await original.apply(dbService,args);if(method!=='setSetting'||args[0]==='sonora:account:preferences')window.dispatchEvent(new Event('sonora:library-local-changed'));return result;};
 }

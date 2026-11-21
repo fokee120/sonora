@@ -4,13 +4,13 @@ import { wave } from './fixtures/bridge-media';
 test.use({ viewport: { width: 402, height: 874 }, hasTouch: true, serviceWorkers: 'block' });
 
 const release = {
-  browseId: 'MPREalbumfixture', title: 'Blueprints and Echoes', artist: 'Fixture artist',
+  browseId: 'MPREalbumfixture', title: 'Blueprints and Echoes', artist: 'Fixture artist', artistId: 'UCfixtureartist',
   year: 2025, artworkUrl: '/fixture-album-cover.svg',
 };
 const albumId = 'catalog:' + release.browseId;
 const songs = ['First Impression', 'Last Echo'].map((title, index) => ({
   videoId: 'album00000' + (index + 1), title, artist: release.artist,
-  album: release.title, durationSeconds: 12,
+  album: release.title, albumId: release.browseId, artistId: release.artistId, durationSeconds: 12,
 }));
 const trackIds = songs.map(song => 'ytm:' + song.videoId);
 
@@ -47,6 +47,13 @@ async function mockService(context: BrowserContext, remote: ReturnType<typeof re
     }
     if (path === '/api/ytmusic/search' && url.searchParams.get('filter') === 'albums') {
       return route.fulfill({ json: { albums: [release] } });
+    }
+    if (path === '/api/ytmusic/browse/' + release.artistId) {
+      remote.browseCalls.push('artist');
+      return route.fulfill({ json: {
+        browseId: release.artistId, kind: 'artist', title: release.artist,
+        description: 'An artist profile with a catalog of releases.', albums: [release], songs,
+      } });
     }
     if (path === '/api/ytmusic/browse/' + release.browseId) {
       const next = url.searchParams.get('continuation');
@@ -104,7 +111,14 @@ test('saving a release creates a separate album with the full original track lis
   await card.click();
   await expect(page.locator('#album-detail-view .track-row-slot')).toHaveCount(2);
   await page.getByRole('button', { name: 'In Library', exact: true }).click();
-  await page.getByRole('dialog', { name: 'Save album' }).getByRole('button', { name: 'My mix', exact: true }).click();
+  const picker = page.getByRole('dialog', { name: 'Save album' });
+  await expect(picker).toBeVisible();
+  await expect.poll(async () => Math.round((await picker.boundingBox())?.y ?? 0)).toBe(874 / 2);
+  await page.touchscreen.tap(200, 400);
+  await expect(picker).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: release.title })).toBeVisible();
+  await page.getByRole('button', { name: 'In Library', exact: true }).click();
+  await picker.getByRole('button', { name: 'My mix', exact: true }).click();
   await expect.poll(() => remote.data.playlists.mix.trackIds).toEqual(trackIds);
   expect(remote.data.albums[albumId].tracks.map(track => track.id)).toEqual(trackIds);
   await page.getByRole('button', { name: 'Back to Library' }).click();
@@ -164,4 +178,59 @@ test('saved albums load from the device and play their downloaded tracks during 
     const path = '/src/lib/db.ts';
     return (await (await import(path)).dbService.getDownloadState(id))?.status;
   }, trackIds[1])).toBe('completed');
+});
+
+test('recent album and artist pages reopen with their content and no repeat browse request', async ({ page, context }) => {
+  const remote = remoteLibrary();
+  await mockService(context, remote);
+  await page.goto('/');
+  await openFromSearch(page);
+  await page.getByRole('button', { name: 'Load more songs' }).click();
+  const album = page.locator('#album-detail-view');
+  await expect(album.locator('.track-row-slot')).toHaveCount(2);
+
+  await album.getByRole('button', { name: release.artist + ' ↗', exact: true }).click();
+  const artist = page.locator('#artist-detail-view');
+  const mobileNav = page.getByRole('navigation', { name: 'Main navigation' });
+  await expect(mobileNav.getByRole('button', { name: 'Search', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(mobileNav.getByRole('button', { name: 'Library', exact: true })).not.toHaveAttribute('aria-current');
+  await expect(artist.getByText('An artist profile with a catalog of releases.')).toBeVisible();
+  await artist.getByRole('button', { name: new RegExp(release.title) }).click();
+  await expect(album.locator('.track-row-slot')).toHaveCount(2);
+  await expect(album.getByRole('status', { name: 'Loading album' })).toHaveCount(0);
+  await album.getByRole('button', { name: 'Back to artist' }).click();
+  await expect(artist.getByText('An artist profile with a catalog of releases.')).toBeVisible();
+  await expect(artist.getByRole('status', { name: 'Loading artist' })).toHaveCount(0);
+  expect(remote.browseCalls).toEqual(['first', 'album-next', 'artist']);
+});
+
+test('the expanded player clears the status bar and opens the current album from the cover', async ({ page, context }, testInfo) => {
+  await mockService(context, remoteLibrary());
+  await page.addInitScript(() => Object.defineProperty(navigator, 'standalone', { value: true }));
+  await page.goto('/');
+  await page.locator('html').evaluate(root => root.style.setProperty('--safe-top', '62px'));
+  await openFromSearch(page);
+  await page.locator('#album-detail-view').getByRole('button', { name: 'Play', exact: true }).tap();
+  await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Home', exact: true }).tap();
+  await page.locator('.mini-track').tap();
+
+  const player = page.getByRole('dialog', { name: 'Now playing' });
+  const header = player.locator('.now-playing-header');
+  await expect.poll(async () => Math.round((await header.boundingBox())?.y ?? 0)).toBe(62 + 24 + 22);
+  const cover = player.getByRole('button', { name: 'Open album ' + release.title });
+  await expect(cover).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('iphone-16-pro-expanded-player.png'), animations: 'disabled' });
+  const bounds = (await cover.boundingBox())!;
+  const x = bounds.x + bounds.width * .6;
+  const y = bounds.y + bounds.height * .5;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x - 85, y, { steps: 8 });
+  await page.mouse.up();
+  await expect(player).toBeVisible();
+  await expect(page.locator('#album-detail-view')).toHaveCount(0);
+  await cover.tap();
+  await expect(player).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: release.title })).toBeVisible();
+  await expect(page.locator('.mini-track')).toContainText('First Impression');
 });

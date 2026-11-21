@@ -32,6 +32,7 @@ interface TrackRowProps {
   reason?: string;
   queueSource?: import('../../types/index.js').QueueSource;
   onPlay?: () => void;
+  onSelect?: () => void;
   onRemoveFromPlaylist?: () => Promise<void>;
 }
 
@@ -78,6 +79,7 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
   reason,
   onRemoveFromPlaylist,
   onPlay,
+  onSelect,
   queueSource,
 }) => {
   const {
@@ -160,16 +162,18 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
   const favorite = isFavorite(track.id);
   const unavailable=!isOnline&&!downloaded;
 
+  const activateTrack = () => {
+    onSelect?.();
+    if (onPlay) onPlay();
+    else if (isCurrent) togglePlay();
+    else playTrack(track, tracksContext);
+  };
+
   const handlePlayClick = (e: React.MouseEvent) => {
     if (unavailable || (e.target as HTMLElement).closest('[data-sonora-overlay]')) return;
     e.stopPropagation();
     playUiSound('tap');
-    if (onPlay) { onPlay(); return; }
-    if (isCurrent) {
-      togglePlay();
-    } else {
-      playTrack(track, tracksContext);
-    }
+    activateTrack();
   };
 
   const handleDownloadToggle = async (e: React.MouseEvent) => {
@@ -202,7 +206,7 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
       {...songGestures}
       data-song-swipe
       role="group" tabIndex={unavailable?-1:0} aria-label={track.title + " by " + track.artist}
-      onKeyDown={e => { if (!unavailable && e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); if (onPlay) onPlay(); else if (isCurrent) togglePlay(); else playTrack(track, tracksContext); } }}
+      onKeyDown={e => { if (!unavailable && e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); activateTrack(); } }}
       id={`track-row-${track.id}`}
       onClick={handlePlayClick}
       className={`track-row group relative flex items-center gap-3 px-4 py-3 transition cursor-pointer select-none ${
@@ -257,7 +261,7 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
           </p>
         </div>
         <p className="text-xs text-zinc-400 truncate mt-0.5">
-          <button className="artist-link" onClick={e=>{e.stopPropagation();navigate(artistRoute(track));}}>{track.artist}</button>
+          <button className="artist-link" onClick={e=>{e.stopPropagation();onSelect?.();navigate(artistRoute(track));}}>{track.artist}</button>
           {showAlbum && track.album && (
             <span className="text-zinc-600 hidden md:inline"> • {track.album}</span>
           )}
@@ -338,8 +342,8 @@ const TrackRowContent: React.FC<TrackRowProps> = ({
               <button onClick={async () => { try { await addTracksToLibrary([track]); await toggleFavorite(track.id); setShowMenu(false); notify(favorite ? 'Removed from liked songs' : 'Saved to liked songs'); } catch { setMenuError('Couldn’t save this song. Try again.'); } }} className="w-full flex items-center px-2.5 rounded-lg hover:bg-white/10"><Heart size={19} fill={favorite ? 'currentColor' : 'none'}/><span>{favorite ? 'Remove from Liked Songs' : 'Save to Liked Songs'}</span></button>
               <button onClick={() => { playNext(track,queueSource); setShowMenu(false); notify('Playing next'); }} className="w-full flex items-center px-2.5 rounded-lg hover:bg-white/10"><Play size={19}/><span>Play Next</span></button>
               <button onClick={() => { const added = addToQueue(track,queueSource); setShowMenu(false); notify(added ? 'Added to queue' : 'Already in queue'); }} className="w-full flex items-center px-2.5 rounded-lg hover:bg-white/10"><ListPlus size={19}/><span>Add to Queue</span></button>
-              <button onClick={()=>{setShowMenu(false);navigate(artistRoute(track));}} className="w-full flex items-center px-2.5 rounded-lg hover:bg-white/10"><span className="menu-catalog-symbol" aria-hidden="true">↗</span><span>Go to artist</span></button>
-              {track.album && !["YouTube Music","YouTube Video"].includes(track.album) && <button onClick={()=>{setShowMenu(false);navigate(albumRoute(track));}} className="w-full flex items-center px-2.5 rounded-lg hover:bg-white/10"><span className="menu-catalog-symbol" aria-hidden="true">◉</span><span>Go to album</span></button>}
+              <button onClick={()=>{setShowMenu(false);onSelect?.();navigate(artistRoute(track));}} className="w-full flex items-center px-2.5 rounded-lg hover:bg-white/10"><span className="menu-catalog-symbol" aria-hidden="true">↗</span><span>Go to artist</span></button>
+              {track.album && !["YouTube Music","YouTube Video"].includes(track.album) && <button onClick={()=>{setShowMenu(false);onSelect?.();navigate(albumRoute(track));}} className="w-full flex items-center px-2.5 rounded-lg hover:bg-white/10"><span className="menu-catalog-symbol" aria-hidden="true">◉</span><span>Go to album</span></button>}
               <button onClick={() => { setShowMenu(false); setPlaylistPickerTrack(track); }} className="w-full flex items-center px-2.5 rounded-lg hover:bg-white/10"><Plus size={19}/><span>Add to Playlist</span></button>
               <button disabled={!isOnline && !downloaded && !downloading} onClick={async e => { if(downloading){offlineManager.cancelDownload(track.id);notify('Download cancelled');}else await handleDownloadToggle(e);setShowMenu(false); }} className="w-full flex items-center px-2.5 rounded-lg hover:bg-white/10"><Download size={19}/><span>{downloading ? 'Cancel download' : downloaded ? 'Remove Offline File' : downloadState?.status === 'failed' ? 'Retry download' : 'Download song'}</span></button>
               {onRemoveFromPlaylist && <button disabled={removing} onClick={async () => { setRemoving(true); setMenuError(''); try { await onRemoveFromPlaylist(); setShowMenu(false); notify('Removed from playlist'); } catch { setMenuError('Could not remove this song. Please try again.'); setRemoving(false); } }} className="w-full flex items-center px-2.5 rounded-lg text-rose-300 hover:bg-white/10"><Trash2 size={19}/><span>{removing ? 'Removing…' : 'Remove from playlist'}</span></button>}

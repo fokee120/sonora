@@ -123,3 +123,41 @@ test('removing the song from the open playlist leaves the picker available', asy
  await expect(mix).toHaveAttribute('aria-pressed', 'false');
  await expect(row).toHaveCount(0);
 });
+
+test.describe('song picker on iPhone 16 Pro', () => {
+ test.use({ viewport: { width: 402, height: 874 }, hasTouch: true, reducedMotion: 'reduce' });
+ test('stays in the lower half, scrolls inside, and dismisses on an outside tap', async ({ page }) => {
+  await page.evaluate(async () => {
+   const path = '/src/lib/db.ts';
+   const { dbService } = await import(path);
+   for (let i = 0; i < 12; i++) {
+    await dbService.savePlaylist({ id: 'extra-' + i, title: 'Extra playlist ' + i, trackIds: [], createdAt: i + 3, updatedAt: i + 3 });
+   }
+  });
+  await page.reload();
+  await page.getByRole('button', { name: 'Library', exact: true }).tap();
+  await page.getByRole('tab', { name: 'Songs', exact: true }).tap();
+  await page.locator('html').evaluate(element => element.style.setProperty('--safe-bottom', '34px'));
+  const plus = page.getByRole('button', { name: 'Add Song 0 to playlist', exact: true });
+  await plus.tap();
+  const picker = page.getByRole('dialog', { name: 'Add to playlist' });
+  await expect(picker).toBeVisible();
+  const bounds = (await picker.boundingBox())!;
+  expect(bounds.y).toBeCloseTo(874 / 2, 0);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(874 - 34);
+  const options = picker.locator('.playlist-picker-options');
+  expect(await options.evaluate(list => list.scrollHeight)).toBeGreaterThan(await options.evaluate(list => list.clientHeight));
+  const close = picker.getByRole('button', { name: 'Close playlist picker' });
+  const closeY = (await close.boundingBox())!.y;
+  await options.evaluate(list => { list.scrollTop = list.scrollHeight; });
+  expect((await close.boundingBox())!.y).toBeCloseTo(closeY, 0);
+
+  await page.touchscreen.tap(200, 400);
+  await expect(picker).toHaveCount(0);
+  await expect(plus).toBeVisible();
+  await plus.tap();
+  await picker.getByRole('button', { name: 'My mix', exact: true }).tap();
+  await expect(picker).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Manage playlists for Song 0', exact: true })).toBeVisible();
+ });
+});

@@ -1,7 +1,13 @@
 import { test, expect } from '@playwright/test';
 test.use({ serviceWorkers: 'block', viewport: { width: 390, height: 844 } });
 test.beforeEach(async ({ page }) => {
-  await page.route('**/api/**', route => route.fulfill({ json: { tracks: [], albums: [], artists: [] } }));
+  await page.route('**/api/**', route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/account/session') {
+      return route.fulfill({ json: { profile: { uid: 'search-fixture' }, expiresAt: Date.now() + 86_400_000 } });
+    }
+    return route.fulfill({ json: { status: 'ok', unchanged: true, tracks: [], albums: [], artists: [], songs: [] } });
+  });
   await page.route('**/api/ytmusic/search?**', async route => {
     const query = new URL(route.request().url()).searchParams.get('q')!;
     await new Promise(resolve => setTimeout(resolve, query === 'older' ? 900 : 500));
@@ -32,4 +38,42 @@ test('replacing a pending query shows only the newest results', async ({ page })
   await input.fill('newer');
   await expect(page.getByText('Result for newer', { exact: true })).toBeVisible();
   await expect(page.getByText('Result for older', { exact: true })).toHaveCount(0);
+});
+
+test('live typing stays out of history, while submitting and opening a result saves the query', async ({ page }) => {
+  const box = page.getByRole('searchbox');
+  const stored = () => page.evaluate(() => JSON.parse(localStorage.getItem('sonora:recent-searches') || '[]'));
+  await box.fill('m');
+  await expect(page.getByText('Result for m', { exact: true })).toBeVisible();
+  await box.fill('mo');
+  await expect(page.getByText('Result for mo', { exact: true })).toBeVisible();
+  expect(await stored()).toEqual([]);
+
+  for (const term of ['Moonlight', 'Midnight', 'Jazz', 'Echo', 'Ocean', 'Summer', 'Sunset']) {
+    await box.fill(term);
+    await box.press('Enter');
+  }
+  await box.fill('sunset');
+  await page.getByRole('button', { name: 'Submit search' }).click();
+  await expect.poll(stored).toEqual(['sunset', 'Summer', 'Ocean', 'Echo', 'Jazz', 'Midnight', 'Moonlight']);
+
+  await box.fill('constellation');
+  await expect(page.getByText('Result for constellation', { exact: true })).toBeVisible();
+  await page.getByRole('group', { name: 'Result for constellation by Fixture' }).press('Enter');
+  await expect.poll(stored).toEqual(['constellation', 'sunset', 'Summer', 'Ocean', 'Echo', 'Jazz', 'Midnight', 'Moonlight']);
+  await page.getByRole('button', { name: 'Clear search', exact: true }).click();
+  const history = page.getByRole('region', { name: 'Search history' });
+  await expect(history.getByRole('button', { name: 'Moonlight', exact: true })).toHaveCount(0);
+  await history.getByRole('button', { name: 'Full history' }).click();
+  await expect(history.getByRole('button', { name: 'Moonlight', exact: true })).toBeVisible();
+  await history.getByRole('button', { name: 'Moonlight', exact: true }).click();
+  await expect(box).toHaveValue('Moonlight');
+  await expect.poll(stored).toEqual(['Moonlight', 'constellation', 'sunset', 'Summer', 'Ocean', 'Echo', 'Jazz', 'Midnight']);
+  await page.reload();
+  await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Search', exact: true }).click();
+  await history.getByRole('button', { name: 'Full history' }).click();
+  await expect(history.getByRole('button', { name: 'Midnight', exact: true })).toBeVisible();
+  await history.getByRole('button', { name: 'Clear', exact: true }).click();
+  await expect(history).toHaveCount(0);
+  await expect.poll(stored).toEqual([]);
 });

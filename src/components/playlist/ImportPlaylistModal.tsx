@@ -1,189 +1,173 @@
-import { startImport } from '../../lib/importJobs.js';
-import React, { useEffect, useId, useState } from 'react';
-import { Overlay } from '../common/Overlay.js';
-import { X, Link2, Loader2, Check, AlertCircle, FileUp } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { FileUp, Link2, Loader2, X } from 'lucide-react';
 import { useApp } from '../../context/AppContext.js';
-import {
-  parsePlaylistUrl,
-  fetchImportedPlaylist,
-  type ImportedPlaylist,
-  type ImportedTrack,
-  parsePlaylistFile,
-} from '../../lib/playlistImport.js';
-import { matchImportedTrack } from '../../lib/recommendations.js';
-import { cachedSearchYoutubeMusic } from '../../lib/ytmusic/youtubeMusic.js';
+import { startImport } from '../../lib/importJobs.js';
+import { fetchImportedPlaylist, parsePlaylistFile, parsePlaylistUrl, type ImportedPlaylist } from '../../lib/playlistImport.js';
+import { fetchYoutubeTrack } from '../../lib/ytmusic/youtubeMusic.js';
 import type { Track } from '../../types/index.js';
+import { Overlay } from '../common/Overlay.js';
 
-interface ImportPlaylistModalProps {
-  isOpen: boolean;
-  onClose: () => void;
+const IMPORT_DRAFT = 'sonora:import-url';
+
+function videoIds(input: string): string[] {
+  const ids = new Set<string>();
+  for (const text of input.trim().split(/[\s,]+/)) {
+    if (/^[\w-]{11}$/.test(text)) {
+      ids.add(text);
+      continue;
+    }
+    try {
+      const url = new URL(text);
+      const host = url.hostname.replace(/^www\./, '');
+      let id = '';
+      if (host === 'youtu.be') id = url.pathname.split('/')[1];
+      else if (host === 'youtube.com' || host === 'music.youtube.com' || host === 'm.youtube.com') {
+        if (url.pathname === '/watch') id = url.searchParams.get('v') || '';
+        else id = url.pathname.match(/^\/(?:shorts|embed|live)\/([\w-]{11})(?:\/|$)/)?.[1] || '';
+      }
+      if (/^[\w-]{11}$/.test(id)) ids.add(id);
+    } catch { /* Ignore text that is neither a YouTube URL nor a video ID. */ }
+  }
+  return [...ids].slice(0, 40);
 }
 
-type Phase = 'url' | 'fetched' | 'matching' | 'done';
-
-/**
- * Import a playlist by URL, then match every entry to a playable
- * YouTube Music track. Matched tracks become a new Sonora playlist;
- * unmatched entries are listed by name and are never silently
- * replaced with a wrong song.
- */
-export const ImportPlaylistModal: React.FC<ImportPlaylistModalProps> = ({ isOpen, onClose }) => {
-  const { createPlaylist, addTracksToLibrary, navigate } = useApp();
-  const [url, setUrl] = useState(() => sessionStorage.getItem('sonora:import-url') || '');
-  const [phase, setPhase] = useState<Phase>('url');
-  const [error, setError] = useState<string | null>(null);
-  const [imported, setImported] = useState<ImportedPlaylist | null>(null);
-  const [matched, setMatched] = useState<Track[]>([]);
-  const [unmatched, setUnmatched] = useState<ImportedTrack[]>([]);
+export function PlaylistImportForm({ onImported, onBusyChange, onVideos, initialTrackIds }: {
+  onImported: () => void;
+  onBusyChange: (busy: boolean) => void;
+  onVideos?: (tracks: Track[]) => Promise<void>;
+  initialTrackIds?: string[];
+}) {
+  const { createPlaylist, deletePlaylist, navigate } = useApp();
+  const [url, setUrl] = useState(() => sessionStorage.getItem(IMPORT_DRAFT) || '');
+  const [preview, setPreview] = useState<ImportedPlaylist | null>(null);
+  const [error, setError] = useState('');
   const [progress, setProgress] = useState('');
-  const [createdId, setCreatedId] = useState<string | null>(null);
-  const titleId = useId();
   const [spotify, setSpotify] = useState<{ configured: boolean; connected: boolean } | null>(null);
+  const importing = useRef(false);
 
   useEffect(() => {
-    if (!isOpen) return;
     const result = new URLSearchParams(location.search).get('spotify');
     if (result) {
       if (result === 'cancelled') setError('Spotify connection was cancelled. You can connect again.');
-      const clean = new URL(location.href); clean.searchParams.delete('spotify');
+      const clean = new URL(location.href);
+      clean.searchParams.delete('spotify');
       history.replaceState(null, '', clean.pathname + clean.search + clean.hash);
     }
-    let active = true;
-    void fetch('/api/spotify/status').then(response => response.ok ? response.json() : null)
-      .then(value => { if (active) setSpotify(value); }).catch(() => {});
-    return () => { active = false; };
-  }, [isOpen]);
+    const controller = new AbortController();
+    void fetch('/api/spotify/status', { signal: controller.signal })
+      .then(response => response.ok ? response.json() : null)
+      .then(value => { if (!controller.signal.aborted) setSpotify(value); })
+      .catch(() => {});
+    return () => controller.abort();
+  }, []);
 
-  const reset = () => {
-    setPhase('url');
-    setError(null);
-    setImported(null);
-    setMatched([]);
-    setUnmatched([]);
-    setProgress('');
-    setCreatedId(null);
-  };
-
-  const handleFetch = async () => {
-    const parsed = parsePlaylistUrl(url);
-    if (!parsed) {
-      setError('That does not look like a Spotify or YouTube Music playlist URL (or a playlist id).');
-      return;
-    }
-    setError(null);
-    setPhase('matching');
-    setProgress('Fetching playlist…');
+  const run = async (message: string, action: () => Promise<void>) => {
+    if (importing.current) return;
+    importing.current = true;
+    onBusyChange(true);
+    setError('');
+    setProgress(message);
     try {
-      const playlist = await fetchImportedPlaylist(parsed);
-      if(parsed.source==='spotify'){setProgress('Importing songs by title and artist…');const created=await createPlaylist(playlist.title,playlist.description||'Imported from Spotify');await startImport(created.id,playlist);navigate({type:'playlist',id:created.id});onClose();reset();return;}
-      setImported(playlist);
-      setPhase('fetched');
+      await action();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Playlist import failed. Try again.');
+    } finally {
+      importing.current = false;
+      onBusyChange(false);
       setProgress('');
-    } catch (err: any) {
-      setError(err?.message || 'Playlist import failed');
-      setPhase('url');
     }
   };
 
-  const handleFile = async (file?: File) => {
-    if (!file) return;
-    setError(null); setPhase('matching'); setProgress('Reading playlist file…');
-    try { const playlist = await parsePlaylistFile(file); setImported(playlist); setPhase('fetched'); setProgress(''); }
-    catch (err: any) { setError(err?.message || 'Could not read that playlist file.'); setPhase('url'); setProgress(''); }
+  const importPlaylist = async (source: ImportedPlaylist) => {
+    if (!source.tracks.length) throw Error('No songs were found in this playlist.');
+    const playlist = await createPlaylist(source.title, source.description || 'Imported from ' + source.source, initialTrackIds);
+    try {
+      await startImport(playlist.id, source);
+    } catch (error) {
+      await deletePlaylist(playlist.id).catch(() => {});
+      throw error;
+    }
+    sessionStorage.removeItem(IMPORT_DRAFT);
+    navigate({ type: 'playlist', id: playlist.id });
+    onImported();
   };
 
-  const handleMatch = async () => {
-    if (!imported) return;
-    setPhase('matching');
-    try {const playlist = await createPlaylist(imported.title, imported.description || `Imported from ${imported.source}`);
-    await startImport(playlist.id,imported);
-    navigate({type:'playlist',id:playlist.id}); onClose();reset();}
-    catch(error){setError(error instanceof Error?error.message:String(error));setPhase('fetched');}
+  const fetchLink = (event: React.FormEvent) => {
+    event.preventDefault();
+    const value = url.trim();
+    if (!value) return;
+    const ids = onVideos ? videoIds(value) : [];
+    const parsed = onVideos && /^[\w-]{11}$/.test(value) ? null : parsePlaylistUrl(value);
+    if (parsed) {
+      void run('Fetching playlist…', async () => {
+        const source = await fetchImportedPlaylist(parsed);
+        if (source.source === 'spotify') {
+          setProgress('Importing songs by title and artist…');
+          await importPlaylist(source);
+        } else {
+          setPreview(source);
+        }
+      });
+    } else if (ids.length && onVideos) {
+      void run('Adding YouTube songs…', async () => {
+        await onVideos(await Promise.all(ids.map(id => fetchYoutubeTrack(id))));
+        setUrl('');
+      });
+    } else {
+      setError(onVideos ? 'Paste a Spotify or YouTube playlist link, or YouTube video links.' : 'Paste a Spotify or YouTube playlist link.');
+    }
   };
 
-  const handleCreate = async () => {
-    if (!imported || matched.length === 0) return;
-    await addTracksToLibrary(matched);
-    const playlist = await createPlaylist(
-      imported.title,
-      `Imported from ${imported.source} (${imported.sourceId}). ${unmatched.length} track(s) could not be matched.${imported.warning ? ' Public preview; playlist completeness is not verified.' : ''}`,
-      matched.map((t) => t.id)
-    );
-    setCreatedId(playlist.id);
+  const readFile = (file?: File) => {
+    if (file) void run('Reading playlist file…', async () => { setPreview(await parsePlaylistFile(file)); });
   };
 
-  return (
-    <Overlay isOpen={isOpen} onClose={onClose} label="Import playlist">
-      <div className="p-4 sm:p-6 space-y-4">
-        <div className="flex items-start justify-between">
-          <div>
-            <h2 id={titleId} className="text-base font-bold text-white flex items-center gap-2"><Link2 className="w-4 h-4 text-indigo-400" /> Import playlist</h2>
-            <p className="text-xs text-zinc-400 mt-1">
-              Paste a public Spotify or YouTube Music link, or import a local JSON/CSV file. Local files stay on this device.
-            </p>
-          </div>
-          <button aria-label="Close import" onClick={onClose} className="shrink-0 p-1 text-zinc-400 hover:text-white"><X className="w-5 h-5" /></button>
-        </div>
-
-        {spotify && !spotify.connected && <div className="text-xs text-zinc-400">
-          {spotify.configured ? <a href="/api/spotify/login" onClick={() => sessionStorage.setItem('sonora:import-url', url)} className="font-semibold text-emerald-400">Connect Spotify</a>
-            : <p>Public Spotify playlists import directly. No Spotify login, Premium, or developer setup required.</p>}
-        </div>}
-        {phase === 'url' || phase === 'matching' ? (
-          <div className="flex flex-col sm:flex-row gap-2">
-            <input aria-label="Playlist URL" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Spotify or YouTube Music playlist link"
-              className="min-w-0 flex-1 px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-base sm:text-sm text-zinc-100 placeholder:text-zinc-600" />
-            <button onClick={handleFetch} disabled={phase === 'matching' || !url.trim()}
-              className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold disabled:opacity-40 flex items-center gap-1.5">
-              {phase === 'matching' && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Fetch
-            </button>
-          </div>
-        ) : null}
-        {(phase === 'url' || phase === 'matching') && <div className="flex items-center gap-3"><label className="action-button cursor-pointer"><FileUp size={17} /> Choose JSON/CSV file<input className="sr-only" type="file" accept=".json,.csv,.tsv,application/json,text/csv" onChange={e => void handleFile(e.target.files?.[0])} /></label><span className="text-[11px] text-zinc-500">JSON, CSV, or TSV</span></div>}
-        {progress && <p role="status" className="text-xs text-zinc-300">{progress}</p>}
-        {error && <p role="alert" className="text-xs text-rose-400 flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5" /> {error}</p>}
-
-        {imported && phase !== 'matching' && (
-          <div className="space-y-3">
-            {imported.warning && <p role="note" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">{imported.warning}</p>}
-            <p className="text-xs text-zinc-300">
-              <span className="font-semibold text-white">{imported.title}</span> — {imported.tracks.length} tracks from {imported.source}
-            </p>
-            {phase === 'fetched' && (
-              <button onClick={handleMatch} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">
-                Import in background
-              </button>
-            )}
-            {phase === 'done' && (
-              <>
-                <p className="text-xs text-zinc-300 flex items-center gap-1.5">
-                  <Check className="w-3.5 h-3.5 text-emerald-400" /> {matched.length} matched · {unmatched.length} unmatched
-                </p>
-                {unmatched.length > 0 && (
-                  <div className="p-3 rounded-xl bg-zinc-900 border border-zinc-800">
-                    <p className="text-[11px] font-semibold text-zinc-400 mb-1">Could not be matched (not added):</p>
-                    <ul className="text-[11px] text-zinc-500 space-y-0.5">
-                      {unmatched.slice(0, 20).map((t, i) => <li key={i}>{t.title} — {t.artist}</li>)}
-                    </ul>
-                  </div>
-                )}
-                {createdId ? (
-                  <button onClick={() => { onClose(); navigate({ type: 'playlist', id: createdId }); }}
-                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">
-                    Open imported playlist
-                  </button>
-                ) : (
-                  <button onClick={handleCreate} disabled={matched.length === 0}
-                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold disabled:opacity-40">
-                    Create Sonora playlist ({matched.length} tracks)
-                  </button>
-                )}
-                <button onClick={reset} className="ml-2 px-3 py-2 rounded-xl bg-zinc-800 text-zinc-300 text-xs font-medium">Import another</button>
-              </>
-            )}
-          </div>
-        )}
+  return <div className="playlist-import-content" aria-busy={!!progress}>
+    {!preview && <>
+      <form className="playlist-import-link" onSubmit={fetchLink}>
+        {onVideos ?
+          <textarea rows={1} aria-label="Playlist URL" value={url} disabled={!!progress} onChange={e => setUrl(e.target.value)}
+            placeholder="Spotify or YouTube link" autoCapitalize="none" autoCorrect="off" spellCheck={false} /> :
+          <input type="text" aria-label="Playlist URL" value={url} disabled={!!progress} onChange={e => setUrl(e.target.value)}
+            placeholder="Spotify or YouTube playlist link" inputMode="url" autoCapitalize="none" autoCorrect="off" spellCheck={false} />}
+        <button type="submit" className="action-button" disabled={!!progress || !url.trim()}>
+          {progress && <Loader2 size={15} className="animate-spin" aria-hidden="true" />}Fetch
+        </button>
+      </form>
+      <div className="playlist-import-alternatives">
+        <label className="text-button cursor-pointer">
+          <FileUp size={15} />Choose JSON/CSV file
+          <input className="sr-only" type="file" accept=".json,.csv,.tsv,application/json,text/csv" disabled={!!progress}
+            onChange={event => { readFile(event.target.files?.[0]); event.target.value = ''; }} />
+        </label>
+        {spotify?.configured && !spotify.connected &&
+          <a href="/api/spotify/login" className="text-button" onClick={() => sessionStorage.setItem(IMPORT_DRAFT, url)}>Connect Spotify</a>}
       </div>
-    </Overlay>
-  );
-};
+    </>}
+    {preview && <>
+      <p className="text-sm"><strong>{preview.title}</strong> · {preview.tracks.length} songs</p>
+      {preview.warning && <p role="note" className="text-xs text-amber-300">{preview.warning}</p>}
+      <div className="flex items-center gap-3">
+        <button className="action-button" disabled={!!progress}
+          onClick={() => void run('Starting import…', () => importPlaylist(preview))}>Import in background</button>
+        <button className="text-button" disabled={!!progress} onClick={() => { setPreview(null); setError(''); }}>Back</button>
+      </div>
+    </>}
+    {progress && <p role="status" className="text-sm text-zinc-400">{progress}</p>}
+    {error && <p role="alert" className="text-sm text-rose-300">{error}</p>}
+  </div>;
+}
+
+export function ImportPlaylistModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const close = () => { if (!busy) onClose(); };
+  return <Overlay isOpen={isOpen} onClose={close} label="Import playlist">
+    <div className="p-4 sm:p-5">
+      <header className="section-heading mb-3">
+        <h2 className="flex items-center gap-2"><Link2 size={18} />Import playlist</h2>
+        <button className="player-icon" aria-label="Close import" disabled={busy} onClick={close}><X size={20} /></button>
+      </header>
+      <PlaylistImportForm onImported={onClose} onBusyChange={setBusy} />
+    </div>
+  </Overlay>;
+}

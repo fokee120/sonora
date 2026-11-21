@@ -48,6 +48,7 @@ interface AppContextType {
   addTracksToLibrary: (tracks: Track[]) => Promise<void>;
   saveAlbumToLibrary: (album: Album) => Promise<void>;
   removeAlbumFromLibrary: (id: string) => Promise<void>;
+  removeLibraryItems: (collection: 'playlists' | 'albums', ids: readonly string[]) => Promise<void>;
 
   // YouTube Music
   ytResults: Track[];
@@ -92,7 +93,8 @@ interface AppContextType {
   createPlaylist: (
     title: string,
     description?: string,
-    initialTrackIds?: string[]
+    initialTrackIds?: string[],
+    playback?: Playlist['playback']
   ) => Promise<Playlist>;
   updatePlaylist: (id: string, patch: Partial<Playlist>) => Promise<void>;
   deletePlaylist: (id: string) => Promise<void>;
@@ -239,10 +241,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     void cacheArtwork({ id: 'album:' + saved.id, artworkUrl: saved.artworkUrl }).catch(() => {});
   }, []);
 
-  const removeAlbumFromLibrary = useCallback(async (id: string) => {
-    await dbService.deleteAlbum(id);
-    setAlbums(previous => previous.filter(album => album.id !== id));
+  const removeLibraryItems = useCallback(async (collection: 'playlists' | 'albums', ids: readonly string[]) => {
+    await dbService.removeLibraryItems(collection, ids);
+    const removed = new Set(ids);
+    if (collection === 'albums') setAlbums(previous => previous.filter(album => !removed.has(album.id)));
+    else setPlaylists(previous => previous.filter(playlist => !removed.has(playlist.id)));
   }, []);
+
+  const removeAlbumFromLibrary = useCallback((id: string) => removeLibraryItems('albums', [id]), [removeLibraryItems]);
 
   // Merge YouTube Music tracks saved via offline downloads (IndexedDB)
   // into the active library so they show up in Library/Downloads/Search.
@@ -444,13 +450,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     async (
       title: string,
       description?: string,
-      initialTrackIds?: string[]
+      initialTrackIds?: string[],
+      playback?: Playlist['playback']
     ): Promise<Playlist> => {
       const newPl: Playlist = {
         id: 'pl_' + Math.random().toString(36).substring(2, 10),
         title: title.trim(),
         description: description?.trim() || '',
         trackIds: initialTrackIds ? Array.from(new Set(initialTrackIds)) : [],
+        ...(playback && { playback }),
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
@@ -482,10 +490,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
-  const deletePlaylist = useCallback(async (id: string) => {
-    await dbService.deletePlaylist(id);
-    setPlaylists((prev) => prev.filter((p) => p.id !== id));
-  }, []);
+  const deletePlaylist = useCallback((id: string) => removeLibraryItems('playlists', [id]), [removeLibraryItems]);
 
   const addTracksToPlaylist = useCallback(async (playlistId: string, ids: string[]) => {
     const updated = await dbService.mutatePlaylist(playlistId, playlist => {
@@ -561,6 +566,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addTracksToLibrary,
         saveAlbumToLibrary,
         removeAlbumFromLibrary,
+        removeLibraryItems,
         ytResults,
         ytFilter,
         isSearchingYt,

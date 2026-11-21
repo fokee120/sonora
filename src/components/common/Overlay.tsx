@@ -16,7 +16,7 @@ function Surface({ onClose, label, children, variant, id }: Omit<Props, 'isOpen'
     onDrag: gesture?.drag, onHorizontalStart: gesture?.begin, onHorizontalRelease: gesture?.release,
     disabled: variant !== 'player', onDown: onClose,
     onDragY: offset => { if (reduced) return; if (offset === 0) void animate(sheetY, 0, { type: 'spring', stiffness: 390, damping: 36 }); else { sheetY.stop(); sheetY.set(offset > 0 ? offset : offset * .12); } },
-    exclude: '.player-lyrics,button,a,[data-title-scroll]',
+    exclude: '.player-lyrics,button:not([data-player-cover-link]),a,[data-title-scroll]',
   });
   useEffect(() => {
     const root = document.getElementById('root');
@@ -27,6 +27,7 @@ function Surface({ onClose, label, children, variant, id }: Omit<Props, 'isOpen'
     return () => { if (--openOverlays === 0) { root?.removeAttribute('inert'); if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true }); returnFocus = null; } };
   }, []);
   const isPlayer = variant === 'player';
+  const isPicker = variant === 'picker';
   const aeroPlayer = isPlayer && document.documentElement.dataset.style === 'aero';
   return <motion.div className={'overlay-backdrop overlay-' + variant} data-sonora-overlay
     initial={{ opacity: isPlayer ? 1 : 0 }} animate={{ opacity: 1 }} exit={{ opacity: isPlayer ? 1 : 0 }}
@@ -36,9 +37,9 @@ function Surface({ onClose, label, children, variant, id }: Omit<Props, 'isOpen'
     <motion.section {...playerGestures} ref={ref} id={id} role="dialog" aria-modal="true" aria-label={label} tabIndex={-1}
       style={isPlayer ? { y: sheetY, transformOrigin: aeroPlayer ? 'center bottom' : undefined } : undefined}
       className={'overlay-surface ' + (isPlayer ? 'player-sheet' : variant === 'drawer' ? 'queue-sheet' : 'dialog-sheet')}
-      initial={reduced ? { opacity: 0 } : variant === 'drawer' ? { x: '100%' } : isPlayer ? (aeroPlayer ? { y: '100%', scale: .97, opacity: .75 } : { y: '100%', opacity: 0 }) : { scale: .97, opacity: 0 }}
+      initial={reduced ? { opacity: 0 } : variant === 'drawer' ? { x: '100%' } : isPlayer ? (aeroPlayer ? { y: '100%', scale: .97, opacity: .75 } : { y: '100%', opacity: 0 }) : isPicker ? { y: '100%' } : { scale: .97, opacity: 0 }}
       animate={{ x: 0, y: 0, scale: 1, opacity: 1 }}
-      exit={reduced ? { opacity: 0 } : variant === 'drawer' ? { x: '100%' } : { y: isPlayer ? '100%' : 24, opacity: isPlayer ? 1 : 0 }}
+      exit={reduced ? { opacity: 0 } : variant === 'drawer' ? { x: '100%' } : { y: isPlayer || isPicker ? '100%' : 24, opacity: isPlayer ? 1 : 0 }}
       transition={reduced ? { duration: .05 } : isPlayer ? {type:'tween',duration: aeroPlayer ? .34 : .26, ease: aeroPlayer ? [.18,.89,.28,1] : [.22,1,.36,1]} : { type: 'spring', stiffness: 370, damping: 39 }}
       onKeyDown={event => {
         if (event.key === 'Escape') { event.stopPropagation(); onClose(); }
@@ -54,5 +55,5 @@ function Surface({ onClose, label, children, variant, id }: Omit<Props, 'isOpen'
     </motion.section>
   </motion.div>;
 }
-type Props = { isOpen: boolean; onClose: () => void; label: string; children: ReactNode; variant?: 'player' | 'drawer' | 'immersive' | 'dialog'; id?: string };
+type Props = { isOpen: boolean; onClose: () => void; label: string; children: ReactNode; variant?: 'player' | 'drawer' | 'immersive' | 'dialog' | 'picker'; id?: string };
 export function Overlay({ isOpen, variant = 'dialog', ...props }: Props) { return createPortal(<AnimatePresence>{isOpen && <Surface variant={variant} {...props} />}</AnimatePresence>, document.body); }

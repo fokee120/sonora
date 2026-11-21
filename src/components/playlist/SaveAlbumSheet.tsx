@@ -51,29 +51,29 @@ export function SaveAlbumSheet({ album, saved, loadAlbum, onClose, onRemoved }: 
     notify('Album added to ' + updated.title);
   });
 
-  return <Overlay isOpen onClose={() => { if (!busy) onClose(); }} label="Save album">
-    <div className="p-5 space-y-4" aria-busy={busy}>
-      <header className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-xl font-semibold">Save album</h2>
-          <p className="truncate text-sm text-zinc-400">{album.title}</p>
-        </div>
-        <button className="player-icon" disabled={busy} aria-label="Close album picker" onClick={onClose}><X size={20} /></button>
-      </header>
+  return <Overlay isOpen onClose={() => { if (!busy) onClose(); }} label="Save album" variant="picker">
+    <header className="playlist-picker-header">
+      <div className="min-w-0">
+        <h2 className="text-xl font-semibold">Save album</h2>
+        <p className="truncate text-sm text-zinc-400">{album.title}</p>
+      </div>
+      <button className="player-icon" disabled={busy} aria-label="Close album picker" onClick={onClose}><X size={20} /></button>
+    </header>
+    <div className="playlist-picker-options" aria-busy={busy}>
       {error && <p role="alert">{error}</p>}
       {busy && <p role="status">Updating your library…</p>}
       <button className="action-button" disabled={busy} onClick={() => void toggleSaved()}>
         {saved ? <BookmarkCheck size={17} /> : <Plus size={17} />}
         {saved ? 'Remove from Library' : 'Save to Library'}
       </button>
-      {!!playlists.length && <section className="section-stack">
+      {!!playlists.length && <section className="playlist-picker-options-group">
         <h3 className="collection-count">Add songs to a playlist</h3>
-        <div className="playlist-library-list">{playlists.map(playlist => (
-          <button className="playlist-library-row" key={playlist.id} disabled={busy} onClick={() => void addToPlaylist(playlist.id)}>
+        {playlists.map(playlist => (
+          <button className="playlist-library-row playlist-picker-choice" key={playlist.id} disabled={busy} onClick={() => void addToPlaylist(playlist.id)}>
             <PlaylistCover playlist={playlist} tracks={tracks} className="playlist-row-art" />
             <span className="truncate">{playlist.title}</span>
           </button>
-        ))}</div>
+        ))}
       </section>}
     </div>
   </Overlay>;

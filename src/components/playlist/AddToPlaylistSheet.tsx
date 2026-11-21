@@ -50,15 +50,15 @@ export function AddToPlaylistSheet({ track, isOpen, onClose }: { track: Track; i
     }
   }
 
-  return <Overlay isOpen={isOpen} onClose={close} label="Add to playlist">
-    <div className="p-5 space-y-4">
-      <header className="flex items-center justify-between">
-        <div className="min-w-0">
-          <h2 className="text-xl font-semibold">Add to playlist</h2>
-          <p className="text-sm text-zinc-400 truncate">{track.title}</p>
-        </div>
-        <button className="player-icon" aria-label="Close playlist picker" onClick={close} disabled={saving}><X size={20} /></button>
-      </header>
+  return <Overlay isOpen={isOpen} onClose={close} label="Add to playlist" variant="picker">
+    <header className="playlist-picker-header">
+      <div className="min-w-0">
+        <h2 className="text-xl font-semibold">Add to playlist</h2>
+        <p className="text-sm text-zinc-400 truncate">{track.title}</p>
+      </div>
+      <button className="player-icon" aria-label="Close playlist picker" onClick={close} disabled={saving}><X size={20} /></button>
+    </header>
+    <div className="playlist-picker-options" aria-busy={saving}>
       {error && <p role="alert" className="text-sm text-rose-300">{error}</p>}
       <button className="action-button" onClick={() => void createWithSong()} disabled={saving}><Plus size={17} />New playlist</button>
       {playlists.map(playlist => {
