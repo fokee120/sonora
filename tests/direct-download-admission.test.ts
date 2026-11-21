@@ -20,7 +20,7 @@ for (const outcome of ['success', 'error', 'cancel'] as const) test(`shared down
   const path = join(root, 'audio.webm');
   await writeFile(path, 'fixture');
   const pending: Array<ReturnType<typeof deferred<DownloadArtifact>>> = [];
-  const entered = Array.from({ length: 21 }, () => deferred());
+  const entered = Array.from({ length: 5 }, () => deferred());
   const disposed = deferred(), allowDispose = deferred();
 
   directDownloader.download = async (_id, signal) => {
@@ -43,18 +43,18 @@ for (const outcome of ['success', 'error', 'cancel'] as const) test(`shared down
   // A progress-bearing request shares the same pool as anonymous downloads.
   const second = fetch(`${url}?session=admission&requestId=12345678-1234-4234-8234-${outcome === 'success' ? '111111111111' : outcome === 'error' ? '222222222222' : '333333333333'}`);
   await entered[1].promise;
-  const extra = Array.from({ length: 18 }, () => fetch(url));
-  await Promise.all(entered.slice(2, 20).map(item => item.promise));
+  const extra = Array.from({ length: 2 }, () => fetch(url));
+  await Promise.all(entered.slice(2, 4).map(item => item.promise));
   const queuedController=new AbortController();
   try {
     const queued=fetch(url,{signal:queuedController.signal});
     await new Promise(resolve=>setTimeout(resolve,40));
-    assert.equal(pending.length,20,'a busy download waits instead of failing or starting another provider');
+    assert.equal(pending.length,4,'a busy download waits instead of failing or starting another provider');
     if (outcome === 'success') {
       pending[0].resolve(artifact(true));
       assert.equal((await first).status, 200);
       await disposed.promise;
-      assert.equal(pending.length,20,'retain admission until artifact cleanup finishes');
+      assert.equal(pending.length,4,'retain admission until artifact cleanup finishes');
       allowDispose.resolve();
     } else if (outcome === 'error') {
       pending[0].reject(new Error('fixture download failure'));
@@ -63,8 +63,8 @@ for (const outcome of ['success', 'error', 'cancel'] as const) test(`shared down
       controller.abort();
       await first;
     }
-    await Promise.race([entered[20].promise,new Promise((_,reject)=>setTimeout(()=>reject(Error('queued download not admitted')),2000))]);
-    pending[20].resolve(artifact());const recovered=await queued;assert.equal(recovered.status,200);await recovered.text();
+    await Promise.race([entered[4].promise,new Promise((_,reject)=>setTimeout(()=>reject(Error('queued download not admitted')),2000))]);
+    pending[4].resolve(artifact());const recovered=await queued;assert.equal(recovered.status,200);await recovered.text();
   } finally {
     queuedController.abort();
     allowDispose.resolve();
@@ -103,20 +103,16 @@ test('download admission remains occupied during response streaming and releases
         client.on('error', reject); clients.push(client);
       });
     }
-    for (let index = 0; index < 16; index++) {
-      const client = get(url, response => { waitingResponses++; response.pause(); });
-      client.on('error', () => {}); clients.push(client);
-    }
-    for (let attempt = 0; calls < 20 && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
-    assert.equal(calls, 20, 'all twenty downloads can prepare while only four are transferring');
+    const client = get(url, response => { waitingResponses++; response.pause(); });
+    client.on('error', () => {}); clients.push(client);
     await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(calls, 4, 'a fifth request queues before starting its provider');
     assert.equal(waitingResponses, 0, 'no fifth transfer may start while four are active');
-    const waitingClient=get(url,response=>response.resume());waitingClient.on('error',()=>{});clients.push(waitingClient);await new Promise(resolve=>setTimeout(resolve,60));
-    assert.equal(calls, 20, 'completed provider work must not release a still-streaming slot');
     clients[0].destroy();
     await disposed.promise;
     for (let attempt = 0; waitingResponses === 0 && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
     assert.ok(waitingResponses > 0, 'a waiting transfer starts when a slot is released');
+    assert.equal(calls, 5);
     for (const client of clients.slice(1)) client.destroy();
     const recovered = await fetch(url);
     assert.equal(recovered.status, 200);

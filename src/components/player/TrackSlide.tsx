@@ -1,26 +1,41 @@
-import React, { useRef, useContext } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
-import { usePlayer } from '../../hooks/usePlayer.js';
+import React, { useContext } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { PlayerMotionContext } from './PlayerMotionContext.js';
-import {useAppearance} from '../../lib/appearance.js';
-import {ScrollingTitle} from './ScrollingTitle.js';
+import type { Track } from '../../types/index.js';
+import { ScrollingTitle } from './ScrollingTitle.js';
 import { Artwork } from '../common/Artwork.js';
-export function TrackSlide({ expanded = false }: { expanded?: boolean }) {
-  const dragX = useContext(PlayerMotionContext);
-  const noir = useAppearance().style === 'gotham';
-  const { currentTrack: track, currentQueueIndex: index } = usePlayer({progress:false});
-  const previous = useRef({ id: track?.id, index: -1, direction: 1 });
-  if (previous.current.id !== track?.id) previous.current = { id: track?.id, index, direction: index < previous.current.index ? -1 : 1 };
-  const direction = previous.current.direction;
-  if (!track) return null;
-  return <motion.div style={dragX ? { x: dragX } : undefined} className={expanded ? 'expanded-track-slide' : 'mini-track-slide'}>
-    <AnimatePresence initial={false} custom={direction} mode="popLayout">
-      <motion.div key={track.id} className={expanded ? 'expanded-track-frame' : 'mini-track-frame'} custom={direction}
-        variants={{ enter: (value: number) => ({ x: value * (expanded ? 90 : 40), opacity: 0 }), exit: (value: number) => ({ x: value * (expanded ? -90 : -40), opacity: 0 }) }}
-        initial="enter" animate={{ x: 0, opacity: 1 }} exit="exit" transition={{ duration: .32, ease: [.22, 1, .36, 1] }}>
-        <motion.div layoutDependency={track.id} layoutId={noir ? undefined : 'sonora-cover:' + track.id} className={expanded ? 'shared-player-cover' : 'mini-artwork'} transition={{type:'spring',stiffness:330,damping:34}}><Artwork track={track} className={expanded ? 'player-cover-image' : 'mini-cover-image'} alt={track.album}/></motion.div>
-        {!expanded && <span className="mini-track-copy"><ScrollingTitle text={track.title}/><span>{track.artist}</span></span>}
+
+const slide = {
+  enter: ({ direction, travel }: { direction: number; travel: number }) => ({ x: direction * travel, opacity: 0 }),
+  exit: ({ direction, travel }: { direction: number; travel: number }) => ({ x: -direction * travel, opacity: 0 }),
+};
+
+export function TrackTransition({ id, frame, viewport, travel, children }: {
+  id: string; frame?: string; viewport?: string; travel: number; children: React.ReactNode;
+}) {
+  const gesture = useContext(PlayerMotionContext);
+  const reduced = useReducedMotion();
+  const custom = { direction: gesture?.direction ?? 1, travel: reduced ? 0 : travel };
+  return <motion.div style={gesture && travel ? { x: gesture.x } : undefined} className={viewport}>
+    <AnimatePresence initial={false} custom={custom}>
+      <motion.div key={id} className={frame} custom={custom} variants={slide}
+        initial="enter" animate={{ x: 0, opacity: 1 }} exit="exit"
+        transition={{ duration: reduced ? .12 : .25, ease: [.22, 1, .36, 1] }}>
+        {children}
       </motion.div>
     </AnimatePresence>
   </motion.div>;
 }
+
+export const TrackSlide = React.memo(function TrackSlide({ track, expanded = false, onArtworkLoad }: {
+  track: Track; expanded?: boolean; onArtworkLoad?: React.ReactEventHandler<HTMLImageElement>;
+}) {
+  return <TrackTransition id={track.id} travel={expanded ? 90 : 40}
+    viewport={expanded ? 'expanded-track-slide' : 'mini-track-slide'}
+    frame={expanded ? 'expanded-track-frame' : 'mini-track-frame'}>
+    <div className={expanded ? 'shared-player-cover' : 'mini-artwork'}>
+      <Artwork track={track} className={expanded ? 'player-cover-image' : 'mini-cover-image'} alt={track.album} eager thumbnail={!expanded} onLoad={onArtworkLoad}/>
+    </div>
+    {!expanded && <span className="mini-track-copy"><ScrollingTitle text={track.title}/><span>{track.artist}</span></span>}
+  </TrackTransition>;
+});

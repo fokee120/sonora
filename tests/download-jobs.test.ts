@@ -36,3 +36,12 @@ test('active progress stays bounded and capacity failures remain retryable',()=>
  updateDownloadJob(active[0],'cancelled');const replacement=randomUUID();beginDownloadJob(replacement,'next');assert.ok(readDownloadJob(replacement,'next'));assert.equal(readDownloadJob(replacement,'busy'),undefined);
  for(const id of [...active,replacement])updateDownloadJob(id,'cancelled');
 });
+
+ test('same owner can retry terminal requests without allowing active or cross-session collisions',()=>{
+ const id=randomUUID();beginDownloadJob(id,'retry-owner');
+ assert.throws(()=>beginDownloadJob(id,'retry-owner'),/already in use/);
+ updateDownloadJob(id,'failed');
+ assert.throws(()=>beginDownloadJob(id,'different-owner'),/already in use/);
+ beginDownloadJob(id,'retry-owner');assert.equal(readDownloadJob(id,'retry-owner')?.phase,'preparing');
+ updateDownloadJob(id,'completed');beginDownloadJob(id,'retry-owner');updateDownloadJob(id,'cancelled');
+ });

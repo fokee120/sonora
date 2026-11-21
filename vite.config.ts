@@ -4,8 +4,11 @@ import path from 'path';
 import {defineConfig} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
 
-export default defineConfig(() => {
+export default defineConfig(({ command }) => {
+  const timestamp = new Date().toISOString().slice(0, 19).replace('T', '.').replace(/:/g, '').replace(/-/g, '.');
+  const version = process.env.SONORA_BUILD_VERSION || (command === 'serve' ? 'dev' : timestamp);
   return {
+    define: { 'import.meta.env.VITE_SONORA_VERSION': JSON.stringify(version) },
     plugins: [
       react(),
       tailwindcss(),
@@ -48,10 +51,10 @@ export default defineConfig(() => {
         workbox: {
           clientsClaim: true,
           skipWaiting: true,
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,ttf,woff,woff2}'],
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,ttf,woff,woff2,webp}', 'themes/aero/intro.m4a'],
           cleanupOutdatedCaches: true,
           navigateFallback: '/index.html',
-          navigateFallbackDenylist: [/^\/api/],
+          navigateFallbackDenylist: [/^\/api/, /^\/prism(?:\/|$)/],
           runtimeCaching: [
             {
               urlPattern: ({ request }) =>

@@ -13,7 +13,7 @@
     "test": "playwright test",
     "test:pwa": "npm run build && playwright test --config playwright.pwa.config.ts",
     "test:ui": "playwright test --config playwright.mobile.config.ts",
-    "test:unit": "tsx --test tests/audio-cancellation.test.ts tests/youtube-search.test.ts tests/catalog-discovery.test.ts tests/radio.test.ts tests/import-concurrency.test.ts tests/profile-summary.test.ts tests/download-jobs.test.ts tests/download-progress-capacity.test.ts tests/download-retry.test.ts",
+    "test:unit": "tsx --test tests/audio-prefix.test.ts tests/audio-cancellation.test.ts tests/youtube-search.test.ts tests/catalog-discovery.test.ts tests/radio.test.ts tests/import-concurrency.test.ts tests/profile-summary.test.ts tests/download-jobs.test.ts tests/download-progress-capacity.test.ts tests/download-retry.test.ts",
     "screenshots": "node scripts/capture-screenshots.mjs"
   },
   "dependencies": {
@@ -27,7 +27,6 @@
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "music-metadata": "^11.15.0",
-    "playwright": "^1.49.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "vite": "^6.2.3",

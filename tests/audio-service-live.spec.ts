@@ -50,15 +50,15 @@ test('real Sonora Audio Service MP3 plays, seeks, downloads through the button a
     await expect.poll(async () => (await state()).currentTime).toBeGreaterThanOrEqual(90);
     expect((await state()).duration).toBeGreaterThan(200);
     await row.hover();
-    await row.getByTitle('Download for offline playback').click();
-    await expect(row.getByTitle('Downloaded offline. Click to remove from local storage.')).toBeVisible({ timeout: 60000 });
-    const saved = await page.evaluate(async () => {
+    await row.getByTitle('More options').click();
+    await page.getByRole('dialog', {name: 'Options for ' + track.title}).getByRole('button', {name: 'Download song', exact: true}).click();
+    const saved = () => page.evaluate(async (id) => {
       const path = '/src/lib/db.ts';
-      const blob = await (await import(path)).dbService.getAudioBlob('ytm:lYBUbBu4W08');
-      return { size: blob.size, type: blob.type };
-    });
-    expect(saved.size).toBeGreaterThan(1000000);
-    expect(saved.type).toBe('audio/mpeg');
+      const blob = await (await import(path)).dbService.getAudioBlob(id);
+      return blob ? { size: blob.size, type: blob.type } : null;
+    }, track.id);
+    await expect.poll(async () => (await saved())?.size ?? 0, { timeout: 60000 }).toBeGreaterThan(1000000);
+    expect((await saved())?.type).toBe('audio/mpeg');
     await context.setOffline(true);
     await page.evaluate(async track => {
       const path = '/src/lib/audio/PlayerEngine.ts';

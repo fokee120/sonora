@@ -2,7 +2,7 @@
 
 ## Runtime
 
-Use Node.js 22+, FFmpeg on PATH, Playwright Chromium, and Python with `yt-dlp[default]` installed in `.sonora/tools/yt-dlp-env` (see the README). On Linux, install Chromium's OS dependencies with `npx playwright install --with-deps chromium`. The audio host must stay running; a static web host alone cannot provide streaming or downloads.
+Use Node.js 22+, FFmpeg on PATH, and Python with `yt-dlp[default]` installed in `.sonora/tools/yt-dlp-env` (see the README). Keep the audio host running for streaming and downloads.
 
 Run `npm ci`, `npm run build`, then `npm start`. The production server defaults to port 3000. Set `PORT` to change it. Run from the repository root so storage and runtime paths resolve correctly.
 
@@ -51,7 +51,7 @@ Back up your account file, fetch the desired release or branch, run `npm ci` and
 
 | Symptom | Check |
 | --- | --- |
-| App opens but audio fails | Chromium is installed, FFmpeg is on PATH, the host can reach YouTube, and the persistent process is running. |
+| App opens but audio fails | Check that yt-dlp is installed, FFmpeg is on PATH, the host can reach YouTube, and the persistent process is running. |
 | Direct downloads are unavailable | The downloader virtual environment exists, or `SONORA_YTDLP_PYTHON` points to its Python executable. Update `yt-dlp[default]` when upstream extraction changes. |
 | Some uploads fail | Removed, private, region-limited or otherwise restricted media may be unavailable. Transient source URLs are retried automatically within bounds. |
 | Google button is missing | `GOOGLE_CLIENT_ID` is configured, the server restarted, and the client permits this exact origin. |
@@ -60,8 +60,3 @@ Back up your account file, fetch the desired release or branch, run `npm ci` and
 
 Set `SONORA_DEBUG_PERF=true` only when investigating timing. Review logs before sharing them; they can contain source identifiers or operational details.
 
-## Browser bridge protection
-
-By default the hidden Chromium bridge requires an unpacked **uBlock Origin Lite** Manifest V3 extension, including its background service worker. Obtain the unpacked extension from its official distribution and place its files (with `manifest.json` at the top level) in `.sonora/extensions/ublock-origin-lite`. Alternatively set `SONORA_ADBLOCK_EXTENSION_DIR` to its absolute directory. The extension is a host dependency and is not committed to this repository.
-
-If it is missing or invalid, streaming initialization fails with an explicit setup error. Administrators who intentionally want to run without that protection can set `SONORA_ADBLOCK=false`; it is an explicit opt-out, not the default. Restart after changing bridge settings.

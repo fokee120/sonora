@@ -102,7 +102,7 @@ export class DirectDownloader {
       if (!size || size > LIMIT) throw new Error('Direct source is empty or exceeds 256 MiB');
       report('finalizing', downloadedBytes, totalBytes, metadata.duration);
       const output = join(directory, `audio.${format}`);
-      const validated = await finalizeFile(path, output, metadata.duration, format, combined, !files[0].endsWith('.webm'));
+      const validated = await finalizeFile(path, output, metadata.duration, format, combined, !files[0].endsWith('.webm'), Number.isInteger(metadata.duration) ? 1 : 0);
       combined.throwIfAborted();
       await rm(path, { force: true });
       await rm(metadataPath, { force: true });

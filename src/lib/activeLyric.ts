@@ -1,0 +1,1 @@
+export function activeLyricIndex(lines:readonly {time:number;text:string}[],position:number):number{let active=-1;for(let i=0;i<lines.length;i++){if(lines[i].time>position)break;if(lines[i].text.trim())active=i;}return active;}

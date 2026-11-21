@@ -28,7 +28,7 @@ export interface SettingItem {
 }
 
 export interface MusicDBSchema extends DBSchema {
-  autoAudio: { key: string; value: { trackId: string; bytes: ArrayBuffer; mimeType: string; size: number; cachedAt: number; lastPlayedAt: number } };
+  autoAudio: { key: string; value: { trackId: string; size: number; cachedAt: number; lastPlayedAt: number; asset?: string; expires?: number } };
   tracks: {
     key: string;
     value: Track;
@@ -172,6 +172,11 @@ export const dbService = {
   async getAllAlbums(): Promise<Album[]> {
     const db = await getDB();
     return db.getAll('albums');
+  },
+
+  async deleteAlbum(id: string): Promise<void> {
+    const db = await getDB();
+    await db.delete('albums', id);
   },
 
   // Artists
@@ -349,7 +354,7 @@ export const dbService = {
 };
 
 // Notify account sync after committed metadata writes; audio bytes remain device-local.
-for(const method of ['saveTracks','savePlaylist','mutatePlaylist','deletePlaylist','addFavorite','removeFavorite','addHistory','setSetting'] as const){
+for(const method of ['saveTracks','saveAlbums','deleteAlbum','savePlaylist','mutatePlaylist','deletePlaylist','addFavorite','removeFavorite','addHistory','setSetting'] as const){
  const original=(dbService as any)[method];
  (dbService as any)[method]=async function(...args:any[]){const result=await original.apply(dbService,args);if(method!=='setSetting'||args[0]==='sonora:account:preferences')window.dispatchEvent(new Event('sonora:library-local-changed'));return result;};
 }

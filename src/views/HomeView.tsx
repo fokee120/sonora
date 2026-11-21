@@ -1,3 +1,6 @@
+import { OfflineIndicator } from '../components/common/OfflineIndicator.js';
+import { ComicScene } from '../components/common/ComicScene.js';
+import { comicHero } from '../lib/comicHeroes.js';
 import { useAppearance } from '../lib/appearance.js';
 import React, {useEffect,useState} from 'react';
 import {useCloudAccount} from '../lib/cloudAccount.js';
@@ -20,18 +23,22 @@ export const HomeView: React.FC = () => {
   const playableRecent=recent.filter(track=>isOnline||isDownloaded(track.id));
   const featured = recent[0] || displayTracks[0];
   const hour = new Date().getHours();
-  const noir = useAppearance().style === 'gotham';
+  const appearance = useAppearance();
+  const noir = appearance.style === 'gotham';
+  const issue = appearance.style === 'comics' ? comicHero(appearance.comicHeroId) : null;
   return <div id="home-view" className="page-stack">
     <header className="home-header page-heading"><div><p className="eyebrow">{noir ? 'SONORA / AFTER DARK' : 'SONORA / FOR YOU'}</p><h1>{noir ? 'Gotham Nights.' : hour < 12 ? 'Good morning.' : hour < 18 ? 'Good afternoon.' : 'Good evening.'}</h1></div>
       <div className="home-header-actions"><button className="player-icon settings-shortcut" title="Settings" aria-label="Settings" onClick={() => navigate({ type: 'settings' })}><Settings size={22} /></button>{account.authenticated&&<button className="home-profile-bubble" aria-label="Your profile" onClick={()=>navigate({type:'profile'})}>{picture?<img src={picture} alt=""/>:<span>{account.profile?.displayName?.slice(0,1)||'♪'}</span>}</button>}</div>
     </header>
+    <OfflineIndicator />
     <section className={'listening-hero ' + (featured ? 'has-artwork' : '')} aria-label="Start listening">
       <div className="hero-copy"><span className="eyebrow">{noir ? (featured ? 'TONIGHT’S SELECTION' : 'THE NIGHT IS YOURS') : featured ? 'PICK UP WHERE YOU LEFT OFF' : 'A LITTLE MORE YOU'}</span>
         <h2>{noir ? 'After\nhours.' : featured ? 'Back to your\nfavorites.' : 'Your world.\nOn repeat.'}</h2>
         <p>{featured ? featured.title + ' · ' + featured.artist : 'The songs you love. The ones you haven’t found yet. All in one place.'}</p>
         <button disabled={!!featured&&!isOnline&&!isDownloaded(featured.id)} className="primary-button" onClick={() => featured ? playTrack(featured, recent.length ? recent : displayTracks) : navigate({ type: 'search' })}>{featured ? <Play size={17} fill="currentColor" /> : <Headphones size={18} />}{noir ? (featured ? 'Drop the needle' : 'Find tonight’s sound') : featured ? 'Listen again' : 'Find your sound'}</button>
       </div>
-      {featured ? <div className="hero-artwork"><Artwork track={featured} alt={featured.album || featured.title} /></div> : <div className="sonora-record" aria-hidden="true"><div className="record-label"><span>s</span></div></div>}
+      {issue && <ComicScene heroId={issue.id} placement="home"/>}
+      {featured ? <div className="hero-artwork"><Artwork track={featured} alt={featured.album || featured.title} /></div> : !issue && <div className="sonora-record" aria-hidden="true"><div className="record-label"><span>s</span></div></div>}
     </section>
     <div className="collection-shortcuts">
       <button onClick={() => navigate({ type: 'liked' })}><span className="shortcut-icon favorite-icon"><Heart size={21} fill="currentColor" /></span><span><strong>Liked songs</strong><small>{favorites.size ? favorites.size + ' favorites' : 'Keep what moves you'}</small></span><ArrowUpRight size={17} /></button>
@@ -45,3 +52,4 @@ export const HomeView: React.FC = () => {
     <RecommendationsSection />
   </div>;
 };
+

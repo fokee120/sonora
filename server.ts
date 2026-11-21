@@ -1,29 +1,83 @@
+import visualRoutes from './src/server/visualRoutes.js';
+import {playbackRooms} from './src/server/accounts/PlaybackRooms.js';
+import {playbackRouter} from './src/server/accounts/playbackRoutes.js';
+import {VisitorAccess} from './src/server/admin/VisitorAccess.js';
+import lyricsRoutes from './src/server/lyricsRoutes.js';
 import express from 'express';
-import googleLibrary from './src/server/accounts/googleLibrary.js';
+import googleLibrary,{requireAccount,authenticatedAccount} from './src/server/accounts/googleLibrary.js';
 import path from 'path';
 import dotenv from 'dotenv';
-import { createServer as createViteServer } from 'vite';
 import youtubeApi from './src/server/ytmusic/api.js';
+import { warmPlaybackWorker } from './src/server/bridge/YtDlpPool.js';
+import { audioCacheGeneration } from './src/server/bridge/AudioPrefix.js';
 import importRoutes from './src/server/import/importRoutes.js';
-import { chromiumBridge } from './src/server/bridge/ChromiumBridge.js';
 
 dotenv.config();
 
 const PORT = Number(process.env.PORT || 3000);
 const app = express();
+const visitorAccess = new VisitorAccess();
+app.use('/api/presence',express.json({limit:'1kb'}));
+// Record only failed or slow iOS starts. Capture requests rejected by account
+// middleware too, and omit song IDs, cookies, session IDs, and signed URLs.
+let audioStartupReports = 0;
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/ytmusic/stream/') || !/iPhone|iPad|iPod|Macintosh.*Mobile/.test(req.get('User-Agent') || '')) return next();
+  const startedAt = Date.now();
+  let firstByteMs: number | undefined;
+  res.locals.audioStarted = () => { firstByteMs ??= Date.now() - startedAt; };
+  res.once('close', () => {
+    const elapsedMs = Date.now() - startedAt;
+    if (audioStartupReports >= 120 || (res.statusCode < 400 && (firstByteMs ?? elapsedMs) < 2500)) return;
+    const trace = typeof req.query.trace === 'string' && /^[a-z0-9]{1,48}$/i.test(req.query.trace) ? req.query.trace : undefined;
+    const range = req.get('Range');
+    audioStartupReports++;
+    console.log('[playback startup]', JSON.stringify({
+      time: new Date().toISOString(), trace, side: 'server',
+      delivery: res.getHeader('Accept-Ranges') === 'bytes' ? 'mp3-ranged' : 'mp3',
+      range: range && /^bytes=\d{0,12}-\d{0,12}$/.test(range) ? range : undefined,
+      status: res.headersSent ? res.statusCode : undefined, firstByteMs, elapsedMs, completed: res.writableFinished,
+    }));
+  });
+  next();
+});
+app.use(requireAccount);
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/ytmusic/stream/')) return next();
+  const account = res.locals.account as ReturnType<typeof authenticatedAccount>;
+  if (!account) return res.sendStatus(401);
+  const permitted = (current: ReturnType<typeof authenticatedAccount>) => {
+    if (!current || current.uid !== account.uid) return false;
+    if (!current.sharedPlayback) return true;
+    const room = playbackRooms.room(account.uid);
+    return room.owner === req.query.device && !room.transfer;
+  };
+  if (!permitted(account)) return res.status(409).json({ error: 'playback_on_another_device' });
+  const timer = setInterval(() => { if (!permitted(authenticatedAccount(req))) res.destroy(); }, 1000);
+  res.once('close', () => clearInterval(timer));
+  next();
+});
+app.use(visitorAccess.middleware);
+const adminApp = express();
+adminApp.use(visitorAccess.adminRouter());
+adminApp.listen(Number(process.env.SONORA_ADMIN_PORT || PORT + 2), '127.0.0.1');
+
 
 app.use('/api/account',googleLibrary);
+app.use('/api/playback',playbackRouter);
 app.use(express.json());
+app.use(lyricsRoutes);
+app.use(visualRoutes);
 
 // Temporary bounded diagnostic output for iOS PWA controls. Accept only known,
 // non-personal fields; keep at most 100 entries per server run.
 let controlReports = 0;
 app.post('/api/player-controls-diagnostic', (req, res) => {
   const { build, event, details, standalone } = req.body || {};
-  if (!['track-controls-3', 'track-controls-4'].includes(build) || !['registered', 'command', 'unavailable', 'ended', 'play-error', 'playing', 'prepared', 'handoff', 'prepare-failed'].includes(event)) return res.sendStatus(400);
+  if (!['track-controls-3', 'track-controls-4', 'native-baseline-1', 'native-baseline-2'].includes(build) || !['registered', 'command', 'unavailable', 'ended', 'play-error', 'playing', 'prepared', 'handoff', 'prepare-failed'].includes(event)) return res.sendStatus(400);
   const allowedKeys = ['play', 'pause', 'seekto', 'seekbackward', 'seekforward', 'previoustrack', 'nexttrack', 'action', 'queued', 'error', 'source', 'visibility', 'prepared'];
   const clean = Object.fromEntries(Object.entries(details || {}).filter(([key, value]) => allowedKeys.includes(key) && typeof value === 'string' && /^[a-zA-Z]{1,40}$/.test(value)));
-  if (controlReports++ < 100) console.log('[player-controls]', JSON.stringify({ time: new Date().toISOString(), build, event, standalone: standalone === true, details: clean }));
+  if ((build.startsWith('native-baseline-') && controlReports++ < 400) || (!build.startsWith('native-baseline-') && controlReports++ < 100)) console.log('[player-controls]', JSON.stringify({ time: new Date().toISOString(), build, event, standalone: standalone === true, details: clean }));
   res.sendStatus(204);
 });
 
@@ -50,10 +104,16 @@ app.get('/api/library', (_req, res) => {
   res.json({ tracks: [], albums: [], artists: [], trackCount: 0 });
 });
 
+app.get('/api/native-resume-check', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(process.cwd(), 'public', 'native-audio-check.html'));
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
+    audioCacheGeneration,
     timestamp: new Date().toISOString(),
   });
 });
@@ -74,10 +134,8 @@ app.use(youtubeApi);
 // VITE MIDDLEWARE & SERVER STARTUP
 // ----------------------------------------------------
 async function startServer() {
-  // Prepare one clean, unassigned player while the UI starts. A user adopts it
-  // exclusively; no dummy song or personal browser profile is involved.
-  void chromiumBridge.warmup().catch(error => console.warn('[bridge] Startup warmup failed:', error.message));
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -104,6 +162,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
+    if (process.env.NODE_ENV === 'production') void warmPlaybackWorker();
     console.log(`Music Player server listening at http://0.0.0.0:${PORT}`);
   });
 }

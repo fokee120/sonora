@@ -24,6 +24,7 @@ export function PageStage() {
   const stage = useRef<HTMLDivElement>(null);
   const panes = useRef<Record<string, HTMLElement | null>>({});
   const current = pages.includes(route.type as Page) ? route.type : 'detail';
+  const libraryAlbum = route.type === 'album' && !!route.fromLibrary;
   const routeKey = route.type + ('id' in route ? ':' + route.id : '') + (route.type==='playlist'&&route.profileId?':'+route.profileId:'')+(route.type==='profile-listening'?':'+route.section:'');
   const positions = useRef(new Map<string, number>());
   const previousKey = useRef(routeKey);
@@ -63,12 +64,18 @@ export function PageStage() {
         animation.onfinish = () => { outgoing.style.visibility = 'hidden'; };
       }
     }
+    const aero = document.documentElement.dataset.style === 'aero';
     const fromPage=previousKey.current.split(':')[0] as Page;
     const tabChange=pane&&pages.includes(fromPage)&&pages.includes(current as Page)&&fromPage!==current;
     if(tabChange&&!arrivedBySwipe.current&&!reduced){
       const direction=pages.indexOf(current as Page)>pages.indexOf(fromPage)?1:-1;
       const outgoing=panes.current[fromPage];
-      const incomingAnimation=pane.animate([{opacity:0,transform:'translate3d('+direction*48+'px,0,0)'},{opacity:1,transform:'none'}],{duration:300,easing:'cubic-bezier(.22,1,.36,1)'});
+      const distance = direction * (aero ? 30 : 48);
+      const lift = aero ? 6 : 0;
+      const incomingAnimation = pane.animate([
+        { opacity: aero ? .46 : 0, transform: 'translate3d(' + distance + 'px,' + lift + 'px,0)' },
+        { opacity: 1, transform: 'none' },
+      ], { duration: aero ? 330 : 300, easing: aero ? 'cubic-bezier(.19,1,.28,1)' : 'cubic-bezier(.22,1,.36,1)' });
       navigationAnimations.current.push(incomingAnimation);
       if(outgoing){outgoing.style.visibility='visible';const exit=outgoing.animate([{opacity:1,transform:'none'},{opacity:0,transform:'translate3d('+direction*-28+'px,0,0)'}],{duration:240,easing:'cubic-bezier(.22,1,.36,1)'});navigationAnimations.current.push(exit);exit.onfinish=()=>{if(previousKey.current===routeKey)outgoing.style.visibility='hidden';};}
     } else if (pane && previousKey.current !== routeKey && !arrivedBySwipe.current && !reduced) {
@@ -103,7 +110,7 @@ export function PageStage() {
       for (const pane of Object.values(panes.current) as (HTMLElement | null)[]) pane?.getAnimations().forEach(animation => animation.cancel());
       reset();
       if (settling.current || !e.isPrimary || e.button !== 0 || (e.target as HTMLElement).closest('button,a,input,textarea,select,[data-song-swipe],[data-sonora-overlay],.segmented-tabs')) return;
-      if (current === 'detail' && (!['playlist','settings','downloads','profile','profile-listening'].includes(route.type) || (e.clientX - e.currentTarget.getBoundingClientRect().left > 32 && !((route.type==='profile-listening'||route.type==='playlist'&&route.profileId)&&e.currentTarget.getBoundingClientRect().right-e.clientX<32)))) return;
+      if (current === 'detail' && ((!libraryAlbum && !['playlist','settings','downloads','profile','profile-listening'].includes(route.type)) || (e.clientX - e.currentTarget.getBoundingClientRect().left > 32 && !((route.type==='profile-listening'||route.type==='playlist'&&route.profileId)&&e.currentTarget.getBoundingClientRect().right-e.clientX<32)))) return;
       gesture.current = { x: e.clientX, y: e.clientY, id: e.pointerId, time: performance.now(), lastX: e.clientX, lastTime: performance.now(), velocity: 0, dx: 0, locked: false, rejected: false };
     },
     onPointerMoveCapture: (e: React.PointerEvent<HTMLElement>) => {
@@ -165,8 +172,8 @@ export function PageStage() {
       default: return <LibraryView />;
     }
   };
-  return <div ref={stage} className="page-stage"><div className="stationary-city" aria-hidden="true"/>
-    {pages.map(name => <main key={name} ref={el => { panes.current[name] = el; }} id={current === name ? 'main-content-scroll' : undefined} aria-hidden={current !== name ? true : undefined} inert={current !== name} className="page-pane main-scroll" style={{ visibility: current === name ? 'visible' : 'hidden' }} {...(current === name ? handlers : {})}><div className="route-content">{name === 'home' ? <HomeView /> : name === 'search' ? <SearchView /> : name === 'recap' ? <RecapView /> : <LibraryView />}</div></main>)}
-    {current === 'detail' && <motion.main layoutScroll key="detail" ref={el => { panes.current.detail = el; }} id="main-content-scroll" className="page-pane main-scroll detail-pane" {...handlers} onScroll={e => positions.current.set(routeKey, e.currentTarget.scrollTop)}><div key={routeKey} className="route-content">{detail()}</div>{['playlist','settings','downloads','profile-listening'].includes(route.type) && <div data-native-swipe aria-hidden="true" className="playlist-back-edge" />}</motion.main>}
+  return <div ref={stage} className="page-stage">
+    {pages.map(name => <main key={name} ref={el => { panes.current[name] = el; }} id={current === name ? 'main-content-scroll' : undefined} aria-hidden={current !== name ? true : undefined} inert={current !== name} className="page-pane main-scroll" data-route-view={name} style={{ visibility: current === name ? 'visible' : 'hidden' }} {...(current === name ? handlers : {})}><div className="page-canvas"><div className="route-content">{name === 'home' ? <HomeView /> : name === 'search' ? <SearchView /> : name === 'recap' ? <RecapView /> : <LibraryView />}</div></div></main>)}
+    {current === 'detail' && <motion.main layoutScroll key="detail" ref={el => { panes.current.detail = el; }} id="main-content-scroll" className="page-pane main-scroll detail-pane" data-route-view={route.type} {...handlers} onScroll={e => positions.current.set(routeKey, e.currentTarget.scrollTop)}><div key={routeKey} className="page-canvas"><div className="route-content">{detail()}</div></div>{(libraryAlbum || ['playlist','settings','downloads','profile-listening'].includes(route.type)) && <div data-native-swipe aria-hidden="true" className="playlist-back-edge" />}</motion.main>}
   </div>;
 }

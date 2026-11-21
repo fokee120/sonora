@@ -146,30 +146,6 @@ test('paused loading never resumes from a late playing event', async ({ page }) 
   expect(result.state.isPlaying).toBe(false);
 });
 
-test('prepare is deduplicated and never assigns an audio stream', async ({ page }) => {
-  const result = await page.evaluate(async () => {
-    const path = '/src/lib/audio/audioSource.ts';
-    const source = await import(path);
-    const before = (window as any).__audios.map((audio: any) => audio.src);
-    let requests = 0;
-    let headers: any;
-    const original = window.fetch;
-    window.fetch = (async (_input: any, init: any) => {
-      requests++;
-      headers = init.headers;
-      return new Response('{}', { status: 200 });
-    }) as typeof fetch;
-    try {
-      await Promise.all([source.prepareYoutubeBridge(), source.prepareYoutubeBridge(), source.prepareYoutubeBridge()]);
-      await source.prepareYoutubeBridge();
-      return { requests, headers, session: source.getBridgeSessionId(), before, after: (window as any).__audios.map((audio: any) => audio.src) };
-    } finally { window.fetch = original; }
-  });
-  expect(result.requests).toBe(1);
-  expect(result.headers['X-Session-Id']).toBe(result.session);
-  expect(result.after).toEqual(result.before);
-});
-
 test('buffering remains cancellable from the player controls', async ({ page }) => {
   await page.evaluate(async track => {
     const path = '/src/lib/audio/PlayerEngine.ts';

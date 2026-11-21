@@ -8,7 +8,7 @@ test('development shell does not install a service worker that can reload playba
   expect(registrations).toEqual([]);
 });
 
-test('opening YouTube search warms playback without selecting a song', async ({ page }) => {
+test('opening YouTube search sends no playback requests', async ({ page }) => {
   let prepares = 0;
   let streams = 0;
   await page.route('**/api/**', route => {
@@ -18,9 +18,8 @@ test('opening YouTube search warms playback without selecting a song', async ({ 
   });
   await page.goto('/');
   await page.locator('#nav-search').waitFor();
-  // Programmatic navigation tests the search lifecycle, not pointerdown warmup.
   await page.locator('#nav-search').evaluate((button: HTMLButtonElement) => button.click());
   await expect(page.locator('#search-input')).toBeVisible();
-  await expect.poll(() => prepares).toBe(1);
+  expect(prepares).toBe(0);
   expect(streams).toBe(0);
 });

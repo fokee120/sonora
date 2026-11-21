@@ -1,6 +1,6 @@
 # Direct offline downloads
 
-Only `/api/ytmusic/download/:videoId` uses yt-dlp. Chromium playback and the legacy `chromiumBridge.download` capture method remain unchanged. Failed direct transfers never fall back to capture or another upload.
+`/api/ytmusic/download/:videoId` uses yt-dlp to fetch and verify the exact upload. Streaming uses yt-dlp through a separate on-demand worker pool.
 
 ## Install
 
@@ -24,8 +24,8 @@ Each job has a 90-second deadline, bounded diagnostics, and a 256 MiB disk budge
 ## Backend checks
 
 ```sh
-node --import tsx --test --test-concurrency=1 tests/direct-download.test.ts tests/download-artifact.test.ts tests/download-jobs.test.ts tests/bridge-download.test.ts tests/bridge-api.test.ts
+node --import tsx --test --test-concurrency=1 tests/direct-download.test.ts tests/download-artifact.test.ts tests/download-jobs.test.ts tests/direct-download-admission.test.ts
 npx tsc --noEmit
 ```
 
-Direct tests run a local fixture CLI subprocess that emits machine progress and finite generated audio. They cover duration mismatch, malformed media, cancellation cleanup, unavailable executable, exact-ID input validation, AAC conversion, route headers, and session isolation. The separate Chromium capture test uses an explicit test-only capture route to retain rollback coverage; it is not a production fallback.
+Direct tests run a local fixture CLI subprocess that emits machine progress and finite generated audio. They cover duration mismatch, malformed media, cancellation cleanup, unavailable executable, exact-ID input validation, AAC conversion, route headers, and session isolation.

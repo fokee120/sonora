@@ -3,8 +3,24 @@ import {dbService} from './db.js';
 import type {Track} from '../types/index.js';
 export type SongLyrics={plain:string;lines:{time:number;text:string}[]};
 export function parseLyrics(text:string):SongLyrics{const lines:SongLyrics['lines']=[];for(const row of text.split(/\r?\n/)){const stamps=[...row.matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)],words=row.replace(/\[[^\]]*\]/g,'').trim();for(const stamp of stamps)lines.push({time:Number(stamp[1])*60+Number(stamp[2]),text:words});}lines.sort((a,b)=>a.time-b.time);return {plain:lines.length?lines.map(l=>l.text).join('\n'):text,lines};}
-const fold=(s:string)=>s.normalize('NFKD').toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
-export function useSongLyrics(track:Track|null,enabled:boolean){const [lyrics,setLyrics]=useState<SongLyrics|null>(null);
- useEffect(()=>{setLyrics(null);if(!track||!enabled)return;let active=true;const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000),key='lyrics:v1:'+track.id;
- void(async()=>{try{if(track.lyrics?.trim()){if(active)setLyrics(parseLyrics(track.lyrics));return;}const cached=await dbService.getSetting<{value:SongLyrics|null;at:number}|null>(key,null);if(cached){if(active)setLyrics(cached.value);if(Date.now()-cached.at<(cached.value?7:1)*86400000||!navigator.onLine)return;}if(!navigator.onLine)return;
- const query=new URLSearchParams({track_name:track.title,artist_name:track.artist});if(track.album)query.set('album_name',track.album);if(track.duration>0&&track.duration<=3600)query.set('duration',String(Math.round(track.duration)));let r=await fetch('https://lrclib.net/api/get?'+query,{signal:controller.signal});let data:any=null;if(r.ok)data=await r.json();else if(r.status!==404)throw Error('Unavailable');if(!data){r=await fetch('https://lrclib.net/api/search?'+new URLSearchParams({track_name:track.title,artist_name:track.artist}),{signal:controller.signal});if(!r.ok)throw Error('Unavailable');const rows=await r.json();data=rows.filter((row:any)=>fold(row.trackName||'')===fold(track.title)&&fold(row.artistName||'')===fold(track.artist)&&(!track.duration||Math.abs(row.duration-track.duration)<8)).sort((a:any,b:any)=>Number(!!b.syncedLyrics)-Number(!!a.syncedLyrics))[0];}const text=!data?.instrumental&&(data?.syncedLyrics||data?.plainLyrics),value=text?.trim()?parseLyrics(text):null;if(active){setLyrics(value);await dbService.setSetting(key,{value,at:Date.now()});}}catch{}finally{clearTimeout(timer);}})();return()=>{active=false;clearTimeout(timer);controller.abort();};},[track?.id,track?.lyrics,enabled]);return lyrics;}
+const pending=new Map<string,Promise<SongLyrics|null>>();
+export async function ensureSongLyrics(track:Track):Promise<SongLyrics|null>{
+ const key='lyrics:v1:'+track.id;
+ if(track.lyrics?.trim()){const value=parseLyrics(track.lyrics);await dbService.setSetting(key,{value,at:Date.now(),providers:2});return value;}
+ const saved=await dbService.getSetting<{value:SongLyrics|null;at:number;providers?:number}|null>(key,null);
+ // Successful lyrics are durable offline song data, never blocked by network freshness.
+ if(saved?.value)return saved.value;
+ if(saved?.providers===2&&Date.now()-saved.at<86400000)return null;
+ if(!navigator.onLine)return null;
+ let task=pending.get(track.id);if(!task){task=(async()=>{
+  const query=new URLSearchParams({title:track.title,artist:track.artist,album:track.album||'',duration:String(track.duration||0)});
+  const response=await fetch('/api/lyrics?'+query,{signal:AbortSignal.timeout(8500),cache:'no-store'});
+  if(!response.ok&&response.status!==404)throw Error('Lyrics unavailable');
+  const data=response.status===404?null:await response.json(),value=data?.text?.trim()?parseLyrics(data.text):null;
+  await dbService.setSetting(key,{value,at:Date.now()});return value;
+ })().finally(()=>pending.delete(track.id));pending.set(track.id,task);}return task;
+}
+export function useSongLyrics(track:Track|null,enabled:boolean){const [state,setState]=useState<{id:string;value:SongLyrics|null}|null>(null);
+ useEffect(()=>{if(!track||!enabled)return;let active=true;void ensureSongLyrics(track).then(value=>{if(active)setState({id:track.id,value});}).catch(()=>{});return()=>{active=false;};},[track?.id,track?.lyrics,enabled]);
+ return state?.id===track?.id?state?.value??null:null;
+}

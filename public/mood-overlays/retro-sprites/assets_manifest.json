@@ -1,0 +1,209 @@
+[
+  {
+    "index": 1,
+    "object": "arcade cabinet",
+    "file": "01_arcade_cabinet.png",
+    "size": [
+      518,
+      684
+    ]
+  },
+  {
+    "index": 2,
+    "object": "pink floating robot",
+    "file": "02_pink_floating_robot.png",
+    "size": [
+      382,
+      538
+    ]
+  },
+  {
+    "index": 3,
+    "object": "lime seated robot",
+    "file": "03_lime_seated_robot.png",
+    "size": [
+      367,
+      537
+    ]
+  },
+  {
+    "index": 4,
+    "object": "asteroid 01",
+    "file": "04_asteroid_01.png",
+    "size": [
+      69,
+      71
+    ]
+  },
+  {
+    "index": 5,
+    "object": "green star",
+    "file": "05_green_star.png",
+    "size": [
+      89,
+      91
+    ]
+  },
+  {
+    "index": 6,
+    "object": "asteroid 02",
+    "file": "06_asteroid_02.png",
+    "size": [
+      91,
+      95
+    ]
+  },
+  {
+    "index": 7,
+    "object": "asteroid 03",
+    "file": "07_asteroid_03.png",
+    "size": [
+      42,
+      41
+    ]
+  },
+  {
+    "index": 8,
+    "object": "asteroid 04",
+    "file": "08_asteroid_04.png",
+    "size": [
+      62,
+      58
+    ]
+  },
+  {
+    "index": 9,
+    "object": "coral star",
+    "file": "09_coral_star.png",
+    "size": [
+      97,
+      101
+    ]
+  },
+  {
+    "index": 10,
+    "object": "asteroid 05",
+    "file": "10_asteroid_05.png",
+    "size": [
+      67,
+      71
+    ]
+  },
+  {
+    "index": 11,
+    "object": "ringed planet",
+    "file": "11_ringed_planet.png",
+    "size": [
+      436,
+      203
+    ]
+  },
+  {
+    "index": 12,
+    "object": "cyan star 01",
+    "file": "12_cyan_star_01.png",
+    "size": [
+      56,
+      61
+    ]
+  },
+  {
+    "index": 13,
+    "object": "asteroid 06",
+    "file": "13_asteroid_06.png",
+    "size": [
+      64,
+      66
+    ]
+  },
+  {
+    "index": 14,
+    "object": "cyan star 02",
+    "file": "14_cyan_star_02.png",
+    "size": [
+      48,
+      51
+    ]
+  },
+  {
+    "index": 15,
+    "object": "purple star",
+    "file": "15_purple_star.png",
+    "size": [
+      43,
+      45
+    ]
+  },
+  {
+    "index": 16,
+    "object": "red star 01",
+    "file": "16_red_star_01.png",
+    "size": [
+      42,
+      43
+    ]
+  },
+  {
+    "index": 17,
+    "object": "crystal cluster",
+    "file": "17_crystal_cluster.png",
+    "size": [
+      277,
+      285
+    ]
+  },
+  {
+    "index": 18,
+    "object": "red star 02",
+    "file": "18_red_star_02.png",
+    "size": [
+      43,
+      44
+    ]
+  },
+  {
+    "index": 19,
+    "object": "asteroid 07",
+    "file": "19_asteroid_07.png",
+    "size": [
+      57,
+      60
+    ]
+  },
+  {
+    "index": 20,
+    "object": "asteroid 08",
+    "file": "20_asteroid_08.png",
+    "size": [
+      40,
+      36
+    ]
+  },
+  {
+    "index": 21,
+    "object": "wired game controller",
+    "file": "21_wired_game_controller.png",
+    "size": [
+      373,
+      244
+    ]
+  },
+  {
+    "index": 22,
+    "object": "floating rock platform",
+    "file": "22_floating_rock_platform.png",
+    "size": [
+      737,
+      200
+    ]
+  },
+  {
+    "index": 23,
+    "object": "purple crystal",
+    "file": "23_purple_crystal.png",
+    "size": [
+      82,
+      111
+    ]
+  }
+]

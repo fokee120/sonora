@@ -1,3 +1,6 @@
+import { playerEngine } from '../lib/audio/PlayerEngine.js';
+import { remotePlaybackCommand } from '../lib/sharedPlayback.js';
+import { sortPlaylistTracks } from '../lib/playlistOrder.js';
 import { rememberSwipePlaylist } from '../lib/swipePlaylist.js';
 import {resumeImports,autoSyncImports} from '../lib/importJobs.js';
 import { audioCache } from '../lib/offline/AudioCache.js';
@@ -12,6 +15,7 @@ import {
 } from '../types/index.js';
 import { migrateLegacyCatalog } from '../lib/legacyCatalogMigration.js';
 import { dbService } from '../lib/db.js';
+import { cacheArtwork } from '../lib/artwork.js';
 import { offlineManager } from '../lib/offline/OfflineManager.js';
 import { useNetworkState } from '../hooks/useNetworkState.js';
 import {
@@ -34,6 +38,7 @@ interface AppContextType {
   albums: Album[];
   artists: Artist[];
   playlists: Playlist[];
+  playlistTrackIds: ReadonlySet<string>;
   favorites: Set<string>;
   history: { trackId: string; playedAt: number; track?: Track }[];
   recentHistory: { trackId: string; playedAt: number; track?: Track }[];
@@ -41,14 +46,19 @@ interface AppContextType {
   libraryError: string | null;
   refreshLibrary: () => Promise<void>;
   addTracksToLibrary: (tracks: Track[]) => Promise<void>;
+  saveAlbumToLibrary: (album: Album) => Promise<void>;
+  removeAlbumFromLibrary: (id: string) => Promise<void>;
 
   // YouTube Music
   ytResults: Track[];
   ytFilter: YtmFilter;
   isSearchingYt: boolean;
   ytSearchError: string | null;
-  searchYoutubeMusic: (query: string, filter?: YtmFilter, signal?: AbortSignal) => Promise<void>;
+  searchYoutubeMusic: (query: string, filter?: YtmFilter, signal?: AbortSignal) => Promise<Track[] | undefined>;
   clearYtResults: () => void;
+
+  playlistPickerTrack: Track | null;
+  setPlaylistPickerTrack: (track: Track | null) => void;
 
   // Create Playlist Modal
   isCreatePlaylistOpen: boolean;
@@ -86,7 +96,8 @@ interface AppContextType {
   ) => Promise<Playlist>;
   updatePlaylist: (id: string, patch: Partial<Playlist>) => Promise<void>;
   deletePlaylist: (id: string) => Promise<void>;
-  addTrackToPlaylist: (playlistId: string, trackId: string) => Promise<void>;
+  addTracksToPlaylist: (playlistId: string, trackIds: string[]) => Promise<Playlist | undefined>;
+  addTrackToPlaylist: (playlistId: string, trackId: string) => Promise<boolean>;
   removeTrackFromPlaylist: (playlistId: string, trackId: string) => Promise<void>;
 
   // Favorites
@@ -108,6 +119,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [albums, setAlbums] = useState<Album[]>([]);
   const [artists, setArtists] = useState<Artist[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const playlistTrackIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const playlist of playlists) for (const id of playlist.trackIds) ids.add(id);
+    return ids;
+  }, [playlists]);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [history, setHistory] = useState<{ trackId: string; playedAt: number; track?: Track }[]>([]);
   const [recentHistory, setRecentHistory] = useState<{ trackId: string; playedAt: number; track?: Track }[]>([]);
@@ -151,6 +167,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => window.removeEventListener('track-duration', onDuration);
   }, [saveDuration]);
 
+
+  const [playlistPickerTrack, setPlaylistPickerTrack] = useState<Track | null>(null);
 
   // Playlist Modal Controls
   const [isCreatePlaylistOpen, setIsCreatePlaylistOpen] = useState<boolean>(false);
@@ -211,6 +229,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       for (const track of incoming) byId.set(track.id, track);
       return Array.from(byId.values());
     });
+  }, []);
+
+  const saveAlbumToLibrary = useCallback(async (album: Album) => {
+    if (!album.tracks?.length) throw new Error('This album has no available songs.');
+    const saved = { ...album, savedAt: Date.now() };
+    await dbService.saveAlbums([saved]);
+    setAlbums(previous => [...previous.filter(item => item.id !== saved.id), saved]);
+    void cacheArtwork({ id: 'album:' + saved.id, artworkUrl: saved.artworkUrl }).catch(() => {});
+  }, []);
+
+  const removeAlbumFromLibrary = useCallback(async (id: string) => {
+    await dbService.deleteAlbum(id);
+    setAlbums(previous => previous.filter(album => album.id !== id));
   }, []);
 
   // Merge YouTube Music tracks saved via offline downloads (IndexedDB)
@@ -299,6 +330,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (sequence !== ytSearchSequence.current || signal?.aborted) return;
       ytErrorRef.current = null;
       setYtResults(tracks);
+      return tracks;
     } catch (err: any) {
       if (err?.name === 'AbortError' || signal?.aborted) return;
       if (sequence !== ytSearchSequence.current) return;
@@ -327,24 +359,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [downloadedTrackIds, isOnline, tracks]
   );
 
-  const displayAlbums = useMemo(
-    () => isOnline
-      ? albums
-      : albums
-          .map((album) => {
-            const matchingTracks = (album.tracks || []).filter((t) =>
-              downloadedTrackIds.has(t.id)
-            );
-            if (matchingTracks.length === 0) return null;
-            return {
-              ...album,
-              tracks: matchingTracks,
-              trackCount: matchingTracks.length,
-            };
-          })
-          .filter((a): a is Album => a !== null),
-    [albums, downloadedTrackIds, isOnline]
-  );
+  const displayAlbums = albums;
 
   const displayArtists = useMemo(
     () => isOnline
@@ -449,9 +464,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(()=>{const refresh=()=>void dbService.getAllPlaylists().then(setPlaylists);window.addEventListener('sonora:playlist-playback-changed',refresh);return()=>window.removeEventListener('sonora:playlist-playback-changed',refresh);},[]);
 
+  const orderEdits = useRef(new Map<string, number>());
   const updatePlaylist = useCallback(async (id: string, patch: Partial<Playlist>) => {
+    const changesOrder = !!(patch.playback?.sort || patch.customOrder);
+    const edit = (orderEdits.current.get(id) ?? 0) + 1;
+    if (changesOrder) orderEdits.current.set(id, edit);
     const updated=await dbService.mutatePlaylist(id, latest=>({...latest,...patch,...(patch.playback?{playback:{...latest.playback,...patch.playback}}:{}),id,updatedAt:Date.now()}));
-    if(updated)setPlaylists(previous=>previous.map(p=>p.id===id?updated:p));
+    if (!updated) return;
+    setPlaylists(previous => previous.map(p => p.id === id ? updated : p));
+    if (changesOrder) {
+      const latest = await dbService.getPlaylist(id);
+      if (!latest) return;
+      const entries = await Promise.all(latest.trackIds.map(trackId => dbService.getTrack(trackId)));
+      if (orderEdits.current.get(id) !== edit) return;
+      const tracks = sortPlaylistTracks(entries.filter((track): track is Track => !!track), latest.playback?.sort, latest.customOrder);
+      if (!remotePlaybackCommand({ action: 'playlistOrder', id, tracks })) playerEngine.setPlaylistOrder(id, tracks);
+    }
   }, []);
 
   const deletePlaylist = useCallback(async (id: string) => {
@@ -459,13 +487,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPlaylists((prev) => prev.filter((p) => p.id !== id));
   }, []);
 
-  const addTrackToPlaylist = useCallback(
-    async (playlistId: string, trackId: string) => {
-      const updated=await dbService.mutatePlaylist(playlistId, pl=>({...pl,trackIds:[...new Set([...pl.trackIds,trackId])],updatedAt:Date.now()}));
-      if(updated){setPlaylists(previous=>previous.map(p=>p.id===playlistId?updated:p));rememberSwipePlaylist(playlistId);}
-    },
-    [playlists]
-  );
+  const addTracksToPlaylist = useCallback(async (playlistId: string, ids: string[]) => {
+    const updated = await dbService.mutatePlaylist(playlistId, playlist => {
+      const existing = new Set(playlist.trackIds);
+      const additions = [...new Set(ids)].filter(id => !existing.has(id));
+      return additions.length ? { ...playlist, trackIds: [...playlist.trackIds, ...additions], updatedAt: Date.now() }
+        : playlist;
+    });
+    if (updated) setPlaylists(previous => previous.map(playlist => playlist.id === playlistId ? updated : playlist));
+    return updated;
+  }, []);
+
+  const addTrackToPlaylist = useCallback(async (playlistId: string, trackId: string) => {
+    if (!await addTracksToPlaylist(playlistId, [trackId])) return false;
+    rememberSwipePlaylist(playlistId);
+    return true;
+  }, [addTracksToPlaylist]);
 
   const removeTrackFromPlaylist = useCallback(
     async (playlistId: string, trackId: string) => {
@@ -514,6 +551,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         albums,
         artists,
         playlists,
+        playlistTrackIds,
         favorites,
         history,
         recentHistory,
@@ -521,12 +559,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         libraryError,
         refreshLibrary,
         addTracksToLibrary,
+        saveAlbumToLibrary,
+        removeAlbumFromLibrary,
         ytResults,
         ytFilter,
         isSearchingYt,
         ytSearchError,
         searchYoutubeMusic,
         clearYtResults,
+        playlistPickerTrack,
+        setPlaylistPickerTrack,
         isCreatePlaylistOpen,
         createPlaylistInitialTrackId,
         openCreatePlaylist,
@@ -550,6 +592,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createPlaylist,
         updatePlaylist,
         deletePlaylist,
+        addTracksToPlaylist,
         addTrackToPlaylist,
         removeTrackFromPlaylist,
         toggleFavorite,

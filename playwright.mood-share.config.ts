@@ -1,0 +1,1 @@
+import {defineConfig} from '@playwright/test';import base from './playwright.row-local.config';export default defineConfig({...base,testMatch:['**/mood-share.spec.ts'],outputDir:'./.sonora/test-results/mood-share',timeout:120000});

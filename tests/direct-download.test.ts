@@ -27,15 +27,12 @@ test('direct provider rejects URL input instead of allowing arbitrary sources', 
 });
 
 
-test('download route uses direct provider with full headers, scoped progress, and no browser session mutation', async () => {
+test('download route uses direct provider with full headers and scoped progress', async () => {
   const { default: app } = await import('../src/server/ytmusic/api.js');
   const { directDownloader } = await import('../src/server/bridge/DirectDownloader.js');
-  const { chromiumBridge } = await import('../src/server/bridge/ChromiumBridge.js');
-  const original = directDownloader.download, capture = chromiumBridge.download;
+  const original = directDownloader.download;
   const f = await fixture();
   directDownloader.download = f.downloader.download.bind(f.downloader);
-  chromiumBridge.download = async () => { throw new Error('Capture must not be invoked'); };
-  const count = chromiumBridge.sessionCount;
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>(resolve => server.once('listening', resolve));
   const base = `http://127.0.0.1:${(server.address() as any).port}`;
@@ -52,10 +49,9 @@ test('download route uses direct provider with full headers, scoped progress, an
     assert.ok(state.downloadedBytes > 0 && state.totalBytes > 0);
     assert.equal(state.recordedSeconds, 0);
     assert.equal((await fetch(`${base}/api/ytmusic/download-status/${requestId}?session=other`)).status, 404);
-    assert.equal(chromiumBridge.sessionCount, count);
     assert.equal((await fetch(`${base}/api/ytmusic/download/${id()}?start=1`)).status, 400);
   } finally {
-    directDownloader.download = original; chromiumBridge.download = capture;
+    directDownloader.download = original;
     await new Promise<void>(resolve => server.close(() => resolve())); await f.dispose();
   }
 });
@@ -85,7 +81,7 @@ async function fixture(mode = 'complete') {
   const root = await mkdtemp(resolve('.sonora/downloads-fixture-'));
   const extension = mode === 'm4a' ? 'm4a' : 'webm';
   const media = join(root, `tone.${extension}`);
-  const generated = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-c:a', mode === 'm4a' ? 'aac' : 'libopus', media]);
+  const generated = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', mode==='rounded'?'sine=frequency=440:duration=2.4':'sine=frequency=440:duration=2', '-c:a', mode === 'm4a' ? 'aac' : 'libopus', media]);
   assert.equal(generated.status, 0, generated.stderr.toString());
   const script = join(root, 'cli.cjs');
   await writeFile(script, `const fs=require('node:fs'),path=require('node:path'); const args=process.argv.slice(2); const target=args[args.indexOf('-o')+1].replace('%(ext)s',${JSON.stringify(extension)}); const id=new URL(args.at(-1)).searchParams.get('v');
@@ -119,3 +115,5 @@ test('a transient 403 re-extracts the source and removes failed partial data bef
 test('repeated 403s stop after three attempts',async()=>{const f=await fixture('retry-always');try{await assert.rejects(f.downloader.download(id(),new AbortController().signal),/HTTP Error 403/);assert.equal(await f.attempts(),3);}finally{await f.dispose();}});
 test('cancelling recovery stops before a new extraction',async()=>{const f=await fixture('retry-once'),controller=new AbortController();let preparations=0;try{await assert.rejects(f.downloader.download(id(),controller.signal,'webm',state=>{if(state.phase==='preparing'&&++preparations===2)controller.abort();}),/abort/i);assert.equal(await f.attempts(),1);}finally{await f.dispose();}});
 test('access restrictions are not treated as refreshable download URLs',async()=>{const f=await fixture('access-denied');try{await assert.rejects(f.downloader.download(id(),new AbortController().signal),/Sign in/);assert.equal(await f.attempts(),1);assert.equal(canRefreshDirectSource(Error('HTTP Error 403: Forbidden')),false);assert.equal(canRefreshDirectSource(Error('unable to download video data: HTTP Error 403: Forbidden')),true);}finally{await f.dispose();}});
+
+test('whole-second provider metadata accepts complete fractional-second audio',async()=>{const f=await fixture('rounded');try{const file=await f.downloader.download(id(),new AbortController().signal);try{assert.ok(file.duration>2.3&&file.duration<2.6);}finally{await file.dispose();}}finally{await f.dispose();}});

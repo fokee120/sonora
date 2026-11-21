@@ -26,6 +26,7 @@ export interface Track {
 }
 
 export interface Album {
+  savedAt?: number;
   artistId?: string;
   id: string;
   title: string;
@@ -157,7 +158,7 @@ export type ViewRoute =
   | { type: 'artists' }
   | { type: 'artist'; id: string; name?: string }
   | { type: 'albums' }
-  | { type: 'album'; id: string; artistId?: string; title?: string; artist?: string }
+  | { type: 'album'; id: string; artistId?: string; title?: string; artist?: string; fromLibrary?: boolean }
   | { type: 'playlists' }
   | { type: 'playlist'; id: string; profileId?: string }
   | { type: 'liked' }

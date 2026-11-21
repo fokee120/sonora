@@ -1,3 +1,4 @@
+import { audioCache } from '../lib/offline/AudioCache.js';
 import {ytmSongToTrack} from '../lib/ytmusic/youtubeMusic.js';
 import {useCloudAccount} from '../lib/cloudAccount.js';
 import {SocialProfile} from '../components/settings/SocialProfile.js';
@@ -9,7 +10,6 @@ import { TrackRow } from '../components/common/TrackRow.js';
 import { ArtistCards, AlbumCards } from '../components/common/CatalogCards.js';
 import { searchCatalog, artistRoute, type CatalogArtist, type CatalogAlbum } from '../lib/ytmusic/catalog.js';
 import { Artwork } from '../components/common/Artwork.js';
-import { prepareYoutubeBridge } from '../lib/audio/audioSource.js';
 const moods = [{ label: 'Slow mornings', query: 'acoustic soul morning', color: 'sage', note: 'Ease into the day' }, { label: 'After hours', query: 'late night r&b', color: 'violet', note: 'A little less ordinary' }, { label: 'In the zone', query: 'instrumental jazz focus', color: 'sand', note: 'Find your flow' }, { label: 'Turn it up', query: 'indie dance favorites', color: 'clay', note: 'Follow the feeling' }];
 export const SearchView: React.FC = () => {
   const { route, navigate, displayTracks, isOnline, ytResults, isSearchingYt, searchYoutubeMusic, clearYtResults } = useApp();
@@ -26,11 +26,18 @@ export const SearchView: React.FC = () => {
   const [retry, setRetry] = useState(0);
   const [recent, setRecent] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem('sonora:recent-searches') || '[]').filter((v: unknown) => typeof v === 'string').slice(0, 6); } catch { return []; } });
   useEffect(() => { if (route.type === 'search' && route.query) setQuery(route.query); }, [route]);
-  useEffect(() => { if (isOnline && route.type === 'search') void prepareYoutubeBridge(); }, [isOnline, route.type]);
   useEffect(() => {
     if (youtube || peopleMode || saved || !isOnline || route.type !== 'search' || kind !== 'songs') return;
     const controller = new AbortController();
-    const timer = setTimeout(() => { if (!query.trim()) { clearYtResults(); return; } setError(''); void searchYoutubeMusic(query, 'songs', controller.signal).catch(reason => { if (!controller.signal.aborted) setError(reason.message || 'Search failed. Try again.'); }); }, 350);
+    const timer = setTimeout(() => {
+      if (!query.trim()) { clearYtResults(); return; }
+      setError('');
+      void searchYoutubeMusic(query, 'songs', controller.signal).then(tracks => {
+        if (tracks) audioCache.enqueueSearch(tracks, controller.signal);
+      }).catch(reason => {
+        if (!controller.signal.aborted) setError(reason.message || 'Search failed. Try again.');
+      });
+    }, 350);
     return () => { clearTimeout(timer); controller.abort(); };
   }, [query, saved, isOnline, searchYoutubeMusic, clearYtResults, retry, route.type, kind, peopleMode, youtube]);
   useEffect(() => { if (ytResults.length && query.trim() && !isSearchingYt) { setRecent(previous => { const next = [query.trim(), ...previous.filter(q => q !== query.trim())].slice(0, 6); localStorage.setItem('sonora:recent-searches', JSON.stringify(next)); return next; }); } }, [ytResults]);
@@ -47,7 +54,7 @@ export const SearchView: React.FC = () => {
     if(!youtube||peopleMode||saved||!isOnline||route.type!=='search')return;
     const controller=new AbortController();setVideos([]);setError('');setVideoLoading(!!query.trim());
     if(!query.trim())return;
-    const timer=setTimeout(()=>{fetch('/api/youtube/search?q='+encodeURIComponent(query.trim()),{signal:controller.signal}).then(async r=>{const data=await r.json();if(!r.ok)throw Error(data.error||'YouTube search failed.');return data;}).then(data=>{if(!controller.signal.aborted)setVideos((data.songs||[]).map(ytmSongToTrack));}).catch(e=>{if(!controller.signal.aborted)setError(e.message);}).finally(()=>{if(!controller.signal.aborted)setVideoLoading(false);});},350);
+    const timer=setTimeout(()=>{fetch('/api/youtube/search?q='+encodeURIComponent(query.trim()),{signal:controller.signal}).then(async r=>{const data=await r.json();if(!r.ok)throw Error(data.error||'YouTube search failed.');return data;}).then(data=>{if(controller.signal.aborted)return;const tracks=(data.songs||[]).map(ytmSongToTrack);setVideos(tracks);audioCache.enqueueSearch(tracks,controller.signal);}).catch(e=>{if(!controller.signal.aborted)setError(e.message);}).finally(()=>{if(!controller.signal.aborted)setVideoLoading(false);});},350);
     return()=>{clearTimeout(timer);controller.abort();};
   },[youtube,peopleMode,saved,isOnline,route.type,query,retry]);
   const local = saved || !isOnline;

@@ -31,8 +31,13 @@ test.beforeEach(async ({ page }, info) => {
     }
     (window as any).Audio = AudioFixture;
   }, { unsupported: info.title.includes('unsupported'), ios: info.title.includes('iOS') });
-  await page.route('**/api/**', route => route.fulfill({ json: { tracks: [], albums: [], artists: [] } }));
+  await page.route('**/api/**', route => route.fulfill({
+    json: new URL(route.request().url()).pathname === '/api/account/session'
+      ? { profile: { uid: 'fixture', displayName: 'Fixture' }, expiresAt: Date.now() + 86400000 }
+      : { status: 'ok', unchanged: true, tracks: [], albums: [], artists: [] },
+  }));
   await page.goto('/');
+  await page.getByRole('navigation', { name: /^(Main|Desktop) navigation$/ }).waitFor();
   test.skip(!await page.evaluate(() => !!navigator.mediaSession && typeof MediaMetadata !== 'undefined'), 'This browser build does not expose the Media Session API; native lock-screen controls require a supported browser/device.');
   await page.evaluate(async tracks => {
     const dbPath = '/src/lib/db.ts', artPath = '/src/lib/artwork.ts';
@@ -82,6 +87,7 @@ test('metadata advertises actual full-resolution pixels and their correct image 
 });
 
 test('downloaded artwork is supplied to the lock screen without network access', async ({ page, context, browserName }) => {
+  await page.evaluate(async tracks=>{const path='/src/lib/offline/OfflineManager.ts';const manager=(await import(path)).offlineManager;for(const track of tracks)(manager as any).downloadsCache.set(track.id,{trackId:track.id,status:'completed',progress:100});},tracks);
   if (browserName === 'webkit') {
     await page.unroute('**/api/**'); await context.route(/^https?:\/\//, route => route.abort('internetdisconnected'));
   } else await context.setOffline(true);
@@ -137,10 +143,10 @@ test('iOS track controls are restored after the audio session starts again', asy
   expect(handlers).toMatchObject({ nexttrack: 'function', previoustrack: 'function', seekforward: 'disabled', seekbackward: 'disabled' });
 });
 
-test('iOS ignores an old pause event and repairs a stale lock-screen state without undoing a real pause', async ({ page }) => {
+test('iOS ignores stale pause events without overwriting browser-owned playback state', async ({ page }) => {
   await start(page);
   const playing = await page.evaluate(async () => { const path='/src/lib/audio/PlayerEngine.ts';const engine=(await import(path)).playerEngine;const audio=(window as any).__mediaAudios.at(-1);audio.dispatchEvent(new Event('pause'));navigator.mediaSession.playbackState='paused';audio.currentTime=2;audio.dispatchEvent(new Event('timeupdate'));return {playing:engine.getState().isPlaying,native:navigator.mediaSession.playbackState}; });
-  expect(playing).toEqual({playing:true,native:'playing'});
+  expect(playing).toEqual({playing:true,native:'paused'});
   await page.evaluate(async()=>{const path='/src/lib/audio/PlayerEngine.ts';(await import(path)).playerEngine.pause();});
   await page.waitForTimeout(1200);
   expect(await page.evaluate(async()=>{const path='/src/lib/audio/PlayerEngine.ts';return {playing:(await import(path)).playerEngine.getState().isPlaying,native:navigator.mediaSession.playbackState};})).toEqual({playing:false,native:'paused'});
@@ -159,7 +165,7 @@ test('iOS automatically advances a queue on the same unlocked audio element', as
       nextId: engine.getState().currentTrack?.id };
   });
   expect(result).toEqual({ same: true, addedPlayers: 0, nextId: tracks[1].id });
-  await expect.poll(() => page.evaluate(async () => { const path='/src/lib/audio/PlayerEngine.ts'; return {playing:(await import(path)).playerEngine.getState().isPlaying,native:navigator.mediaSession.playbackState}; })).toEqual({playing:true,native:'playing'});
+  await expect.poll(() => page.evaluate(async () => { const path='/src/lib/audio/PlayerEngine.ts'; return {playing:(await import(path)).playerEngine.getState().isPlaying,native:navigator.mediaSession.playbackState}; })).toEqual({playing:true,native:'none'});
 });
 
 test('iOS interface sounds never create a competing audio session', async ({ page }) => {
@@ -185,15 +191,78 @@ test('iOS repeated lock-screen taps cannot accumulate queue changes while switch
   expect(result).toBe(tracks[1].id);
 });
 
-test('iOS long-pause Play reconnects an expired capture at its saved position on the same native element', async ({page})=>{
+
+
+test('iOS native playback inference never declares the active media session inactive',async({page})=>{
+ await page.evaluate(()=>{
+  (window as any).__stateWrites=[];
+  Object.defineProperty(navigator.mediaSession,'playbackState',{configurable:true,get:()=>'playing',set:value=>(window as any).__stateWrites.push(value)});
+ });
+ await start(page);
+ await page.evaluate(async()=>{const p='/src/lib/audio/PlayerEngine.ts';const e=(await import(p)).playerEngine;e.pause();window.dispatchEvent(new PageTransitionEvent('pageshow'));await e.play();});
+ await page.waitForTimeout(1200);
+ expect(await page.evaluate(()=>(window as any).__stateWrites)).toEqual([]);
+});
+
+test('iOS resume diagnostics distinguish a playing event from an advancing clock and capture interrupted audio session',async({page})=>{
+ const reports:any[]=[];
+ await page.route('**/api/player-controls-diagnostic',async route=>{reports.push(route.request().postDataJSON());await route.fulfill({status:204});});
+ await start(page);
+ await page.evaluate(()=>{Object.defineProperty(navigator,'audioSession',{configurable:true,value:{type:'playback',state:'interrupted'}});(window as any).__mediaHandlers.pause();Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});(window as any).__mediaHandlers.play();});
+ await expect.poll(()=>reports.filter(p=>p.details?.action==='resumeClock').map(p=>p.details)).toContainEqual(expect.objectContaining({play:'clockStopped',queued:'sessionInterrupted',visibility:'hidden'}));
+});
+
+test('iOS resume diagnostics report actual clock progress once without treating it as audible output',async({page})=>{
+ const reports:any[]=[];
+ await page.route('**/api/player-controls-diagnostic',async route=>{reports.push(route.request().postDataJSON());await route.fulfill({status:204});});
+ await start(page);
+ await page.evaluate(()=>{(window as any).__mediaHandlers.pause();(window as any).__mediaHandlers.play();const a=(window as any).__mediaAudios.at(-1);a.currentTime+=1;a.dispatchEvent(new Event('timeupdate'));});
+ await expect.poll(()=>reports.filter(p=>p.details?.action==='resumeClock').length).toBe(1);
+ expect(reports.find(p=>p.details?.action==='resumeClock').details.play).toBe('clockAdvancing');
+ await page.waitForTimeout(1200);
+ expect(reports.filter(p=>p.details?.action==='resumeClock')).toHaveLength(1);
+});
+
+test('iOS a new pause cancels pending resume diagnostics',async({page})=>{
+ const reports:any[]=[];
+ await page.route('**/api/player-controls-diagnostic',async route=>{reports.push(route.request().postDataJSON());await route.fulfill({status:204});});
+ await start(page);
+ await page.evaluate(()=>{(window as any).__mediaHandlers.pause();(window as any).__mediaHandlers.play();(window as any).__mediaHandlers.pause();});
+ await page.waitForTimeout(1200);
+ expect(reports.filter(p=>p.details?.action==='resumeClock')).toHaveLength(0);
+});
+
+test('iOS long-pause remote Play reaches the attached native source before suspended cache or network work', async ({page})=>{
+ await start(page);
+ const result=await page.evaluate(async()=>{
+  const p='/src/lib/audio/PlayerEngine.ts', d='/src/lib/db.ts';
+  const engine=(await import(p)).playerEngine as any, db=(await import(d)).dbService;
+  const audio=engine.audio,src=audio.src;
+  audio.currentTime=47;audio.dispatchEvent(new Event('timeupdate'));
+  (window as any).__mediaHandlers.pause();
+  Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});
+  engine.pausedAt=Date.now()-120_000;
+  let reads=0,plays=0;
+  // Model IndexedDB staying suspended until foreground.
+  db.getSetting=()=>{reads++;return new Promise(()=>{});};
+  const playOriginal=audio.play.bind(audio);
+  audio.play=()=>{plays++;return playOriginal();};
+  (window as any).__mediaHandlers.play();
+  // Do not yield: native play must happen inside the remote-command turn.
+  return {plays,reads,sameSource:audio.src===src,position:engine.getState().currentTime};
+ });
+ expect(result).toEqual({plays:1,reads:0,sameSource:true,position:47});
+});
+
+test('iOS long-pause Play reconnects an expired MP3 stream at its saved position on the same native element', async ({page})=>{
  await start(page);
  await page.evaluate(()=>{
   const audio=(window as any).__mediaAudios.at(-1);audio.currentTime=47;audio.dispatchEvent(new Event('timeupdate'));
   (window as any).__mediaHandlers.pause();
  });
  const before=await page.evaluate(()=>({src:(window as any).__mediaAudios.at(-1).src,count:(window as any).__mediaAudios.length,paused:navigator.mediaSession.playbackState}));
- expect(before.paused).toBe('paused');
- await page.evaluate(async()=>{const p='/src/lib/audio/PlayerEngine.ts';const engine=(await import(p)).playerEngine;(engine as any).pausedAt=Date.now()-120_000;(window as any).__resumeAudio=(engine as any).audio;Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});(window as any).__mediaHandlers.play();});
+ expect(before.paused).not.toBe('playing');
+ await page.evaluate(async()=>{const p='/src/lib/audio/PlayerEngine.ts';const engine=(await import(p)).playerEngine;(engine as any).pausedAt=Date.now()-120_000;(window as any).__resumeAudio=(engine as any).audio;(engine as any).audio.error={code:2};Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});(window as any).__mediaHandlers.play();});
  await expect.poll(()=>page.evaluate(()=>(window as any).__mediaAudios.at(-1).src)).toContain('start=47');
  const result=await page.evaluate(async()=>{const p='/src/lib/audio/PlayerEngine.ts';const engine=(await import(p)).playerEngine;return{same:(engine as any).audio===(window as any).__resumeAudio,count:(window as any).__mediaAudios.length,position:engine.getState().currentTime,id:engine.getState().currentTrack.id};});
  expect(result.same).toBe(true);expect(result.count).toBe(before.count);expect(result.position).toBe(47);expect(result.id).toBe(tracks[0].id);
@@ -201,7 +270,7 @@ test('iOS long-pause Play reconnects an expired capture at its saved position on
 test('iOS paused native sources remain attached and page-show repair never starts playback',async({page})=>{
  await start(page);
  const result=await page.evaluate(async()=>{const p='/src/lib/audio/PlayerEngine.ts';const engine=(await import(p)).playerEngine;const audio=(engine as any).audio,src=audio.src;audio.currentTime=31;audio.dispatchEvent(new Event('timeupdate'));engine.pause();window.dispatchEvent(new PageTransitionEvent('pageshow'));return{src:audio.src,original:src,paused:audio.paused,position:engine.getState().currentTime,state:navigator.mediaSession.playbackState,play:typeof(window as any).__mediaHandlers.play};});
- expect(result.src).toBe(result.original);expect(result.paused).toBe(true);expect(result.position).toBe(31);expect(result.state).toBe('paused');expect(result.play).toBe('function');
+ expect(result.src).toBe(result.original);expect(result.paused).toBe(true);expect(result.position).toBe(31);expect(result.state).not.toBe('playing');expect(result.play).toBe('function');
 });
 test('iOS resumes a complete prepared current source after a long pause without reopening a live stream',async({page})=>{
  await start(page);
@@ -215,67 +284,47 @@ test('iOS restores the paused song position after the page is discarded without 
  await page.evaluate(()=>(window as any).__mediaHandlers.play());await expect.poll(()=>page.evaluate(()=>(window as any).__mediaAudios.at(-1).src)).toContain('start=67');
 });
 
-// Model the native UI independently: WebKit can retain the declared JS value
-// while replacing the underlying Now Playing session during a source handoff.
-async function emulateStaleNativeSession(page: Page) {
-  await page.evaluate(() => {
-    const session = navigator.mediaSession;
-    const state = Object.getOwnPropertyDescriptor(MediaSession.prototype, 'playbackState')!;
-    const metadata = Object.getOwnPropertyDescriptor(MediaSession.prototype, 'metadata')!;
-    (window as any).__nativePlayback = 'paused';
-    Object.defineProperty(session, 'playbackState', {
-      configurable: true,
-      get: () => state.get!.call(session),
-      set: value => {
-        const previous = state.get!.call(session);
-        state.set!.call(session, value);
-        // WebKit's setter returns early when the declared value is unchanged.
-        if (previous !== value) (window as any).__nativePlayback = value;
-      },
-    });
-    Object.defineProperty(session, 'metadata', {
-      configurable: true,
-      get: () => metadata.get!.call(session),
-      set: value => { metadata.set!.call(session, value); (window as any).__nativePlayback = 'paused'; },
-    });
-    const register = session.setActionHandler.bind(session);
-    session.setActionHandler = (action, handler) => {
-      register(action, handler);
-      (window as any).__nativePlayback = 'paused';
-    };
-  });
-}
 
-test('iOS republishes Playing after native controls and artwork refresh, even when the declared state is already playing', async ({ page }) => {
-  await emulateStaleNativeSession(page);
-  await start(page);
-  await expect.poll(() => page.evaluate(() => navigator.mediaSession.metadata?.artwork[0]?.sizes)).toBe('1200x1200');
-  expect(await page.evaluate(() => (window as any).__nativePlayback)).toBe('playing');
-  await page.waitForTimeout(1100);
-  expect(await page.evaluate(() => (window as any).__nativePlayback)).toBe('playing');
-  await page.evaluate(() => {
-    (window as any).__nativePlayback = 'paused';
-    (window as any).__mediaAudios.at(-1).dispatchEvent(new Event('playing'));
-  });
-  expect(await page.evaluate(() => (window as any).__nativePlayback)).toBe('playing');
-  await start(page, 1);
-  await expect.poll(() => page.evaluate(() => navigator.mediaSession.metadata?.title)).toBe('Second song');
-  await expect.poll(() => page.evaluate(() => navigator.mediaSession.metadata?.artwork[0]?.sizes)).toBe('1200x1200');
-  expect(await page.evaluate(() => (window as any).__nativePlayback)).toBe('playing');
+test('iOS repeated lock-screen Play and session refresh never fake a pause or stick buffering',async({page})=>{
+ await start(page);await page.evaluate(()=>{const ms=navigator.mediaSession,d=Object.getOwnPropertyDescriptor(MediaSession.prototype,'playbackState')!;(window as any).__writes=[];Object.defineProperty(ms,'playbackState',{configurable:true,get:()=>d.get!.call(ms),set:v=>{(window as any).__writes.push(v);d.set!.call(ms,v);}});const audio=(window as any).__mediaAudios.at(-1);audio.play=async()=>{audio.paused=false;};});
+ await page.evaluate(async()=>{const path='/src/lib/audio/PlayerEngine.ts';const engine=(await import(path)).playerEngine;(engine as any).state.playbackSource='local';(engine as any).currentObjectUrl='blob:offline-fixture';const audio=(window as any).__mediaAudios.at(-1);audio.src='blob:offline-fixture';await engine.play();audio.dispatchEvent(new Event('waiting'));audio.currentTime+=1;audio.dispatchEvent(new Event('timeupdate'));engine.setupMediaSession();window.dispatchEvent(new PageTransitionEvent('pageshow'));});await page.waitForTimeout(1100);
+ expect(await page.evaluate(async()=>{const path='/src/lib/audio/PlayerEngine.ts';const state=(await import(path)).playerEngine.getState();return {playing:state.isPlaying,loading:state.isLoading,native:navigator.mediaSession.playbackState,falsePause:(window as any).__writes.includes('paused')};})).toMatchObject({playing:true,loading:false,falsePause:false});
+ await page.evaluate(()=>(window as any).__mediaHandlers.pause());
+ expect(await page.evaluate(async()=>{const path='/src/lib/audio/PlayerEngine.ts';const state=(await import(path)).playerEngine.getState();return {paused:(window as any).__mediaAudios.at(-1).paused,loading:state.isLoading,playing:state.isPlaying,native:navigator.mediaSession.playbackState};})).toMatchObject({paused:true,loading:false,playing:false});
 });
 
-test('iOS a real pause survives delayed artwork, remote-control refresh and pending Playing updates', async ({ page }) => {
-  await emulateStaleNativeSession(page);
-  await start(page);
-  await page.evaluate(() => (window as any).__mediaHandlers.pause());
-  await expect.poll(() => page.evaluate(() => navigator.mediaSession.metadata?.artwork[0]?.sizes)).toBe('1200x1200');
-  await page.waitForTimeout(1100);
-  expect(await page.evaluate(() => ({ declared: navigator.mediaSession.playbackState, native: (window as any).__nativePlayback, paused: (window as any).__mediaAudios.at(-1).paused }))).toEqual({ declared: 'paused', native: 'paused', paused: true });
+
+test('iOS recap counts completed songs, never starts, skips, pauses or duplicate endings',async({page})=>{
+ await start(page);
+ const history=()=>page.evaluate(async()=>{const p='/src/lib/db.ts';return(await import(p)).dbService.getPlayHistory();});
+ expect(await history()).toHaveLength(0);
+ await page.evaluate(()=>(window as any).__mediaHandlers.nexttrack());
+ await expect.poll(()=>page.evaluate(async()=>{const p='/src/lib/audio/PlayerEngine.ts';return(await import(p)).playerEngine.getState().isPlaying;})).toBe(true);
+ await page.evaluate(()=>(window as any).__mediaHandlers.pause());expect(await history()).toHaveLength(0);
+ await page.evaluate(()=>(window as any).__mediaHandlers.play());
+ await page.evaluate(()=>{const a=(window as any).__mediaAudios.at(-1);a.currentTime=180;a.dispatchEvent(new Event('ended'));});
+ await expect.poll(async()=>(await history()).length).toBe(1);
+ expect((await history())[0].trackId).toBe(tracks[1].id);
+ await page.evaluate(()=>(window as any).__mediaAudios.at(-1).dispatchEvent(new Event('ended')));
+ expect(await history()).toHaveLength(1);
 });
 
-test('iOS refresh survives native same-task coalescing without releasing the media session',async({page})=>{
- await start(page);await expect.poll(()=>page.evaluate(()=>navigator.mediaSession.metadata?.artwork[0]?.sizes)).toBe('1200x1200');await page.waitForTimeout(1100);
- await page.evaluate(async()=>{const session=navigator.mediaSession,descriptor=Object.getOwnPropertyDescriptor(MediaSession.prototype,'playbackState')!;let committed=session.playbackState,pending=committed,timer:any=null;(window as any).__coalescedNative='paused';(window as any).__sessionWrites=[];Object.defineProperty(session,'playbackState',{configurable:true,get:()=>descriptor.get!.call(session),set:value=>{descriptor.set!.call(session,value);(window as any).__sessionWrites.push(value);pending=value;if(timer===null)timer=setTimeout(()=>{timer=null;if(pending!==committed){committed=pending;(window as any).__coalescedNative=pending;}},0);}});const p='/src/lib/audio/PlayerEngine.ts';(await import(p)).playerEngine.setupMediaSession();});
- await expect.poll(()=>page.evaluate(()=>(window as any).__coalescedNative)).toBe('playing');expect(await page.evaluate(()=>(window as any).__sessionWrites.includes('none'))).toBe(false);
- await page.evaluate(async()=>{const p='/src/lib/audio/PlayerEngine.ts',e=(await import(p)).playerEngine;e.setupMediaSession();e.pause();});await expect.poll(()=>page.evaluate(()=>(window as any).__coalescedNative)).toBe('paused');
+test('iOS recap excludes early EOF and previews but counts every completed repeat',async({page})=>{
+ await start(page);
+ await page.evaluate(async()=>{const p='/src/lib/audio/PlayerEngine.ts';const e=(await import(p)).playerEngine;e.setRepeatMode('one');const a=(window as any).__mediaAudios.at(-1);a.currentTime=30;a.dispatchEvent(new Event('ended'));});
+ const history=()=>page.evaluate(async()=>{const p='/src/lib/db.ts';return(await import(p)).dbService.getPlayHistory();});
+ expect(await history()).toHaveLength(0);
+ for(let i=1;i<=2;i++){
+  await page.evaluate(()=>{const a=(window as any).__mediaAudios.at(-1);a.currentTime=180;a.dispatchEvent(new Event('ended'));});
+  await expect.poll(async()=>(await history()).length).toBe(i);
+ }
+ await page.evaluate(async track=>{const p='/src/lib/audio/PlayerEngine.ts';const e=(await import(p)).playerEngine;await e.previewTrack(track);const a=(window as any).__mediaAudios.at(-1);a.currentTime=180;a.dispatchEvent(new Event('ended'));},tracks[1]);
+ expect(await history()).toHaveLength(2);
+});
+
+
+test('iOS natural completion still counts when native pause arrives before ended',async({page})=>{
+ await start(page,1);
+ await page.evaluate(()=>{const a=(window as any).__mediaAudios.at(-1);a.currentTime=180;a.ended=true;a.pause();a.dispatchEvent(new Event('ended'));});
+ await expect.poll(()=>page.evaluate(async()=>{const p='/src/lib/db.ts';return(await(await import(p)).dbService.getPlayHistory()).length;})).toBe(1);
 });

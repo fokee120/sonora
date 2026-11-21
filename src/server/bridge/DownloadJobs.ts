@@ -13,7 +13,11 @@ const terminal=(phase:CaptureProgress['phase'])=>phase==='completed'||phase==='f
 function prune() { for (const [id, job] of jobs) if (job.expires <= Date.now()) jobs.delete(id); }
 export function beginDownloadJob(id: string, session: string): void {
   prune();
-  if (jobs.has(id)) throw Object.assign(new Error('Download request identifier already in use'), { status: 409 });
+  const previous = jobs.get(id);
+  // Browsers/proxies may retry the same GET. Only its owner can restart a
+  // finished attempt; live jobs and another user's identifiers stay protected.
+  if (previous && (previous.session !== session || !terminal(previous.state.phase))) throw Object.assign(new Error('Download request identifier already in use'), { status: 409 });
+  if (previous) jobs.delete(id);
   // Retained results are diagnostics, not occupied download slots. Evict only
   // terminal records; active preparation/transfer progress must stay available.
   if(jobs.size>=128)for(const [oldId,job] of jobs){if(terminal(job.state.phase))jobs.delete(oldId);if(jobs.size<128)break;}

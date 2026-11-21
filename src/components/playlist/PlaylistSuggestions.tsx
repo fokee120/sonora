@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, RefreshCw, Sparkles } from 'lucide-react';
+import { RefreshCw, Sparkles } from 'lucide-react';
 import { useApp } from '../../context/AppContext.js';
 import { TrackRow } from '../common/TrackRow.js';
 import { cachedSearchYoutubeMusic, searchYoutubeMusic } from '../../lib/ytmusic/youtubeMusic.js';
@@ -9,7 +9,7 @@ import type { Playlist, Track } from '../../types/index.js';
 export function PlaylistSuggestions({ playlist }: {
     playlist: Playlist;
 }) {
-    const { tracks, addTracksToLibrary, addTrackToPlaylist, isOnline } = useApp();
+    const { tracks, isOnline } = useApp();
     const [suggested, setSuggested] = useState<Track[]>([]);
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
@@ -27,5 +27,5 @@ export function PlaylistSuggestions({ playlist }: {
     }; void load(); return () => { active = false; }; }, [playlist.id, key, isOnline, artistsKey, refresh]);
     useEffect(() => { audioCache.enqueue(suggested, 1); playerEngine.setPlaylistRecommendations(playlist.id, playlist.trackIds, suggested); }, [suggested, key, playlist.id]);
     const visible = suggested.filter(track => !playlist.trackIds.includes(track.id));
-    return <section className="space-y-3"><div className="flex items-center justify-between gap-3"><h2 className="text-lg font-semibold flex gap-2 items-center"><Sparkles size={18}/>Recommended next</h2><button className="player-icon text-blue-400" aria-label="Refresh playlist recommendations" title="Refresh playlist recommendations" disabled={loading} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={18} className={loading ? 'animate-spin' : ''}/></button></div><p className="text-xs text-zinc-400">Continues after this playlist when repeat is off. Tap + to keep a song in this playlist.</p>{error && <p className="text-sm text-zinc-400">{error}</p>}{!loading && visible.length === 0 && <p className="text-sm text-zinc-500">Add songs to find recommendations for this playlist.</p>}{visible.length > 0 && <div className="song-list">{visible.map((track, index) => <TrackRow key={track.id} track={track} index={index} tracksContext={visible} trailingAction={<button className="player-icon text-blue-300" aria-label={`Add ${track.title} to ${playlist.title}`} onClick={async event => { event.stopPropagation(); await addTracksToLibrary([track]); await addTrackToPlaylist(playlist.id, track.id); }}><Plus size={21}/></button>}/>)}</div>}</section>;
+    return <section className="space-y-3"><div className="flex items-center justify-between gap-3"><h2 className="text-lg font-semibold flex gap-2 items-center"><Sparkles size={18}/>Recommended next</h2><button className="player-icon text-blue-400" aria-label="Refresh playlist recommendations" title="Refresh playlist recommendations" disabled={loading} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={18} className={loading ? 'animate-spin' : ''}/></button></div><p className="text-xs text-zinc-400">Continues after this playlist when repeat is off.</p>{error && <p className="text-sm text-zinc-400">{error}</p>}{!loading && visible.length === 0 && <p className="text-sm text-zinc-500">Add songs to find recommendations for this playlist.</p>}{visible.length > 0 && <div className="song-list">{visible.map((track, index) => <TrackRow key={track.id} track={track} index={index} tracksContext={visible}/>)}</div>}</section>;
 }

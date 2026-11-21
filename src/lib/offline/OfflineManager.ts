@@ -1,3 +1,4 @@
+import {ensureSongLyrics} from '../lyrics.js';
 import {retryDownload} from './downloadRetry.js';
 import { Track, Album, Playlist, DownloadState, StorageQuotaInfo } from '../../types/index.js';
 import { dbService } from '../db.js';
@@ -19,6 +20,7 @@ export class OfflineManager {
   private listeners: Set<Listener> = new Set();
   private downloadsCache = new Map<string, DownloadState>();
   private playlistBatches = new Map<string, { cancelled: boolean }>();
+  private albumBatches = new Map<string, { cancelled: boolean }>();
   private notificationTimer: ReturnType<typeof setTimeout> | null = null;
 
   private initialization: Promise<void>;
@@ -27,12 +29,19 @@ export class OfflineManager {
   private constructor() {
     this.audioStorage = new IndexedDBAudioStorage();
     this.initialization = this.init();
+    void this.initialization.then(()=>this.saveDownloadedLyrics()).catch(()=>{});
     window.addEventListener('sonora:playlist-saved', event => {
       const detail = (event as CustomEvent<{playlist: Playlist; previous?: Playlist}>).detail;
       this.schedulePlaylist(detail.playlist.id, detail.previous);
     });
-    window.addEventListener('online', () => { void this.processQueue(); void this.reconcileKeptPlaylists(); });
+    window.addEventListener('online', () => {void this.saveDownloadedLyrics(); void this.processQueue(); void this.reconcileKeptPlaylists(); });
     void this.initialization.then(() => this.reconcileKeptPlaylists()).catch(error => console.warn('Could not restore offline playlists:', error));
+  }
+
+  private async saveDownloadedLyrics(){
+    if(!navigator.onLine)return;
+    const states=await dbService.getCompletedDownloads();let cursor=0;
+    await Promise.all(Array.from({length:2},async()=>{while(cursor<states.length){const state=states[cursor++];try{const track=await dbService.getTrack(state.trackId);if(track)await ensureSongLyrics(track);}catch{}}}));
   }
 
   private schedulePlaylist(id: string, previous?: Playlist): void {
@@ -135,6 +144,10 @@ export class OfflineManager {
   private notify(): void {
     if (this.notificationTimer) return;
     this.notificationTimer = setTimeout(() => { this.notificationTimer = null; for (const listener of this.listeners) listener(); }, 100);
+  }
+
+  public hasPendingDownloads(): boolean {
+    return this.activeControllers.size > 0 || this.downloadQueue.length > 0;
   }
 
   public getDownloadState(trackId: string): DownloadState | undefined {
@@ -289,6 +302,7 @@ export class OfflineManager {
     try {
       await updateState({ status: 'downloading', progress: 0, phase: 'preparing', recordedSeconds: 0, sourceDuration: 0 });
       // Cover failures never discard a successfully downloaded song.
+      const lyricsTask=ensureSongLyrics(track).catch(()=>null);
       const artworkTask = track.artworkUrl ? cacheArtwork(track).catch(() => null) : Promise.resolve(null);
 
       await retryDownload(async()=>{
@@ -312,7 +326,7 @@ export class OfflineManager {
         await validateAudioBlob(blob, track, controller.signal, audioRes);
         controller.signal.throwIfAborted();
         await this.audioStorage.save(track.id, blob, blob.type || 'audio/mpeg');
-        await artworkTask;
+        await artworkTask;await lyricsTask;
         await updateState({
           status: 'completed',
           progress: 100,
@@ -357,7 +371,7 @@ export class OfflineManager {
 
       // Store only after checking the actual downloaded audio.
       await this.audioStorage.save(track.id, combinedBlob, mimeType);
-      await artworkTask;
+      await artworkTask;await lyricsTask;
 
       // Step 4: Finalize metadata
       await updateState({
@@ -390,9 +404,24 @@ export class OfflineManager {
    * Download all tracks in an album
    */
   public async downloadAlbum(album: Album): Promise<void> {
-    if (!album.tracks || album.tracks.length === 0) return;
-    for (const track of album.tracks) {
-      await this.downloadTrack(track);
+    if (!album.tracks?.length || this.albumBatches.has(album.id)) return;
+    const batch = { cancelled: false };
+    this.albumBatches.set(album.id, batch);
+    try {
+      for (const track of album.tracks) {
+        if (batch.cancelled) break;
+        await this.downloadTrack(track);
+      }
+    } finally {
+      this.albumBatches.delete(album.id);
+    }
+  }
+
+  public cancelAlbumDownloads(album: Album): void {
+    const batch = this.albumBatches.get(album.id);
+    if (batch) batch.cancelled = true;
+    for (const track of album.tracks || []) {
+      if (this.isTrackDownloading(track.id)) this.cancelDownload(track.id);
     }
   }
 
@@ -478,6 +507,7 @@ export class OfflineManager {
       this.disabledPlaylists.add(playlist.id);
       if (playlist.keepDownloaded !== false) await this.setPlaylistOfflineIntent(playlist.id, false);
     }
+    for (const batch of this.albumBatches.values()) batch.cancelled = true;
     // Abort any active downloads
     for (const controller of this.activeControllers.values()) {
       controller.abort();

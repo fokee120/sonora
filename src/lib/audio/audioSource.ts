@@ -1,10 +1,11 @@
-import {isServerOnline} from '../serverConnection.js';
+import {getPlaybackDeviceId} from '../sharedPlayback.js';
+import {playbackTrace} from './playbackTimings.js';
 import type { Track } from '../../types/index.js';
 import { isYoutubeTrack, youtubeVideoId } from '../ytmusic/youtubeMusic.js';
 import { createUuid } from '../uuid.js';
 
 /**
- * Per-client session ID for the Chromium bridge. Each browser gets a unique
+ * Per-client audio session ID. Each browser gets a unique
  * ID (stored in localStorage) so the server can give concurrent users
  * isolated playback sessions — two people can play different songs at once.
  */
@@ -26,37 +27,12 @@ export function bridgeHeaders(): Record<string, string> {
   return { 'X-Session-Id': getBridgeSessionId() };
 }
 
-let prepareRequest: Promise<void> | null = null;
-let prepareAgainAt = 0;
-
-/** Optional, silent warmup. Never request a song or wait for this before play. */
-export function prepareYoutubeBridge(): Promise<void> {
-  if (prepareRequest) return prepareRequest;
-  if (!isServerOnline() || Date.now() < prepareAgainAt) return Promise.resolve();
-  // Cool down failures too, including deployments without this optional API.
-  prepareAgainAt = Date.now() + 30_000;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10_000);
-  prepareRequest = fetch('/api/ytmusic/bridge/prepare', {
-    method: 'POST', headers: bridgeHeaders(), signal: controller.signal,
-  }).then(async response => {
-    if (response.ok) prepareAgainAt = Date.now() + 5 * 60_000;
-    await response.body?.cancel();
-  }).catch(() => {
-    // Warmup is an optimization, not a playback prerequisite.
-  }).finally(() => {
-    clearTimeout(timeout);
-    prepareRequest = null;
-  });
-  return prepareRequest;
-}
-
 export function youtubeStreamUrl(track: Track, start = 0): string {
   const videoId = youtubeVideoId(track);
   if (!/^[\w-]{11}$/.test(videoId)) throw new Error('Invalid YouTube track. Search for it again.');
   // Session ID as query param (<audio src> can't set headers) — isolates
   // this user's playback from other concurrent users on the bridge.
-  return `/api/ytmusic/stream/${encodeURIComponent(videoId)}?session=${encodeURIComponent(getBridgeSessionId())}${start > 0 ? `&start=${Math.max(0, start)}` : ''}`;
+  return `/api/ytmusic/stream/${encodeURIComponent(videoId)}?session=${encodeURIComponent(getBridgeSessionId())}&device=${encodeURIComponent(getPlaybackDeviceId())}&format=mp3${start > 0 ? `&start=${Math.max(0, start)}` : ''}${playbackTrace()?'&trace='+encodeURIComponent(playbackTrace()):''}`;
 }
 
 export function youtubeDownloadUrl(track: Track): string {

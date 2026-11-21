@@ -50,13 +50,12 @@ A quiet default interface, or a completely different atmosphere. Themes change t
 
 ## Run Sonora
 
-Use **Node.js 22 or newer**, npm, and a persistent host. Streaming needs Playwright Chromium; direct downloads need Python with `yt-dlp` and **FFmpeg** available on `PATH`. Sonora is not a static-only site or a serverless audio backend.
+Use **Node.js 22 or newer**, npm, and a persistent host. YouTube Music playback and downloads use Python with `yt-dlp` and **FFmpeg** available on `PATH`.
 
 ```sh
 git clone https://github.com/fokee120/sonora.git
 cd sonora
 npm ci
-npx playwright install chromium
 ```
 
 Set up the downloader runtime:
@@ -73,7 +72,7 @@ python -m venv .sonora/tools/yt-dlp-env
 .sonora\tools\yt-dlp-env\Scripts\python.exe -m pip install -U "yt-dlp[default]"
 ```
 
-Install FFmpeg using your system's package manager. The streaming bridge also requires an **unpacked Manifest V3 uBlock Origin Lite extension** in `.sonora/extensions/ublock-origin-lite` (or the path in `SONORA_ADBLOCK_EXTENSION_DIR`). Set this up before starting; the bridge refuses unprotected startup by default. See [bridge setup](docs/SELF_HOSTING.md#browser-bridge-protection).
+Install FFmpeg using your system's package manager.
 
 Then build and start:
 
@@ -119,7 +118,7 @@ More focused suites cover imports, cache/download separation, lyrics, account sy
 
 ## How it fits together
 
-**React + TypeScript + Vite** render the app. Motion handles transitions and gestures. IndexedDB holds local library data, artwork and offline audio. An Express server provides discovery, imports and Google account persistence. A session-isolated Chromium bridge captures streaming audio; `yt-dlp` and FFmpeg prepare complete audio-only downloads. UI navigation keeps the audio engine alive.
+**React + TypeScript + Vite** render the app. Motion handles transitions and gestures. IndexedDB holds local library data, artwork and offline audio. An Express server provides discovery, imports and Google account persistence. `yt-dlp` and FFmpeg serve YouTube Music streams and prepare complete audio-only downloads. UI navigation keeps the audio engine alive.
 
 Lyrics come from [LRCLIB](https://lrclib.net/). Public catalog and import availability depend on their upstream services; unavailable or restricted uploads can fail. Sonora does not download video files or provide a signed-in YouTube Music home feed. Use media you are authorized to access.
 

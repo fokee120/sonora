@@ -1,11 +1,15 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
+import { AppUpdateNotice } from './components/common/AppUpdateNotice.js';
 import './index.css';
 import './themes.css';
+import './comics.css';
+import './aero.css';
 import { prepareOfflineApp } from './lib/offline/appShell.js';
 
 import { initializeAppearance } from './lib/appearance.js';
+import { startAeroIntro } from './lib/appearance/aeroIntro.js';
 void initializeAppearance();
 
 async function start() {
@@ -22,9 +26,12 @@ async function start() {
       }
     } catch (error) { console.warn('Could not retire development service worker:', error); }
   }
-  createRoot(document.getElementById('root')!).render(
+  const app = document.getElementById('root')!;
+  startAeroIntro(app);
+  createRoot(app).render(
     <StrictMode>
       <App />
+      <AppUpdateNotice />
     </StrictMode>,
   );
   void prepareOfflineApp();

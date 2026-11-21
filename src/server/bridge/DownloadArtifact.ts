@@ -31,7 +31,7 @@ async function ffmpeg(args: string[], signal: AbortSignal): Promise<string> {
 }
 
 // Reuse full packet decoding for disk-backed direct files without copying them.
-export async function finalizeFile(raw: string, path: string, expectedDuration: number, format: 'webm' | 'mp3', signal: AbortSignal, transcodeWebm = false): Promise<{ duration: number; size: number }> {
+export async function finalizeFile(raw: string, path: string, expectedDuration: number, format: 'webm' | 'mp3', signal: AbortSignal, transcodeWebm = false, sourcePrecision = 0): Promise<{ duration: number; size: number }> {
   if (!Number.isFinite(expectedDuration) || expectedDuration <= 0) throw new Error('Invalid source duration');
   const available = 256 * 1024 * 1024 - (await stat(raw)).size;
   if (available <= 0) throw new Error('Download exceeds 256 MiB disk limit');
@@ -40,7 +40,7 @@ export async function finalizeFile(raw: string, path: string, expectedDuration: 
   const progress = await ffmpeg(['-xerror', '-i', path, '-map', '0:a:0', '-progress', 'pipe:1', '-f', 'null', '-'], signal);
   const times = [...progress.matchAll(/out_time_us=(\d+)/g)];
   const duration = Number(times.at(-1)?.[1]) / 1e6;
-  const tolerance = Math.max(0.35, Math.min(1, expectedDuration * 0.005));
+  const tolerance = Math.max(0.35, Math.min(1, expectedDuration * 0.005), sourcePrecision + 0.1);
   if (!Number.isFinite(duration) || Math.abs(duration - expectedDuration) > tolerance) throw new Error(`Incomplete audio duration: decoded ${duration}s; expected ${expectedDuration}s`);
   const size = (await stat(path)).size;
   if (!size) throw new Error('Empty finalized audio download');

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Native audio check · Sonora</title>
+<style>:root{color-scheme:dark}body{font:16px/1.5 system-ui,sans-serif;background:#111317;color:#edf0f6;margin:0;padding:max(24px,env(safe-area-inset-top)) 20px 40px}main{max-width:640px;margin:auto}h1{font-size:26px}p,li{color:#b9c1cf}section{border:1px solid #343c49;border-radius:14px;padding:18px;margin:18px 0}button,select{font:inherit;border:1px solid #58647a;background:#222b3a;color:#fff;border-radius:9px;padding:11px;min-height:46px;max-width:100%}button{cursor:pointer}button:disabled{opacity:.45}select{width:100%;margin-bottom:12px}audio{display:block;width:100%;margin:20px 0}a{color:#a5beff}#status{min-height:48px}small{color:#aab4c6}</style></head>
+<body><main><a href="/">← Back to Sonora</a><h1>Native audio isolation</h1>
+<p>Use the native samples for the baseline check. The optional silent-loop test uses a separate Web Audio session with the native player paused.</p>
+<p id="container"></p><ol><li>Load a source below, then press the audio player’s Play button.</li><li>Lock the phone, pause from the lock screen, wait at least 10 seconds, then press Play once.</li><li>Compare the HTTP sample with a saved song.</li></ol>
+<section><h2>1. Native MP3 and AAC audio</h2><p>Quiet 60-second tones, served as complete files with byte-range support. MP3 and AAC use different decoders from the original WAV test. Requires a server connection.</p><button id="mp3" type="button">Load MP3 sample</button> <button id="aac" type="button">Load AAC sample</button> <button id="http" type="button">Load WAV sample</button></section>
+<section><h2>2. Your downloaded audio</h2><p>Read directly from this device’s existing storage. Nothing is uploaded or modified.</p><label for="saved">Saved song</label><select id="saved" disabled><option>Reading saved songs…</option></select><button id="local" type="button" disabled>Load saved song</button></section>
+<section><h2>3. Paused icon with a silent loop</h2>
+<p>Start the tone, lock the phone, and pause it from the lock screen. Wait ten seconds and press Play once while still locked. Repeat the pause and resume without reopening the app.</p>
+<button id="webaudio" type="button">Start silent-loop test</button>
+<button id="stop-webaudio" type="button" disabled>Stop test</button></section>
+<audio id="audio" controls playsinline preload="auto"></audio><p id="status" role="status">Choose a source. No audio starts automatically.</p><small>Only anonymous source type, native events and clock progress are reported. Song titles and IDs stay on this device.</small>
+</main><script>
+'use strict';
+const audio=document.querySelector('#audio'),status=document.querySelector('#status'),saved=document.querySelector('#saved'),local=document.querySelector('#local');
+const standalone=matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
+document.querySelector('#container').textContent='Installed-app container: '+(standalone?'yes':'no — open this check from Sonora Settings for the PWA test');
+let source='none',objectUrl=null,db=null,probe=null;
+let keepalive=null;
+const startTest=document.querySelector('#webaudio'),stopTest=document.querySelector('#stop-webaudio');
+
+function stopKeepalive() {
+  const test=keepalive;
+  if(!test)return;
+  keepalive=null;
+  clearInterval(test.timer);
+  test.node.stop();
+  void test.context.close().catch(()=>{});
+  navigator.mediaSession.setActionHandler('play',null);
+  navigator.mediaSession.setActionHandler('pause',null);
+  navigator.mediaSession.setPositionState?.();
+  navigator.mediaSession.metadata=null;
+  navigator.mediaSession.playbackState=audio.paused?'paused':'playing';
+  startTest.disabled=false;
+  stopTest.disabled=true;
+}
+
+function stopTestPlayback() {
+  audio.pause();
+  stopKeepalive();
+  status.textContent='Silent-loop test stopped.';
+}
+
+function startKeepaliveTest() {
+  const Context=window.AudioContext||window.webkitAudioContext;
+  if(!Context||!navigator.mediaSession) {
+    status.textContent='This browser does not expose the audio APIs for this test.';
+    return;
+  }
+  load('/diagnostics/native-tone.mp3','baselineWebAudio');
+  const session=navigator.mediaSession;
+  try {
+    if(navigator.audioSession)navigator.audioSession.type='playback';
+    const context=new Context();
+    const node=context.createBufferSource();
+    // A real, repeating buffer of zero samples keeps the render clock separate
+    // from the paused native audio element used for lock-screen controls.
+    node.buffer=context.createBuffer(1,context.sampleRate,context.sampleRate);
+    node.loop=true;
+    node.connect(context.destination);
+    node.start();
+    const test={context,node,timer:null,pausedAt:null,resuming:false};
+    keepalive=test;
+    startTest.disabled=true;
+    stopTest.disabled=false;
+    session.metadata=new MediaMetadata({title:'Sonora silent-loop test'});
+    session.setActionHandler('pause',()=>{
+      if(keepalive!==test)return;
+      if(audio.paused) {stopTestPlayback();return;}
+      audio.pause();
+    });
+    session.setActionHandler('play',()=>{
+      if(keepalive!==test||test.pausedAt===null||test.resuming)return;
+      test.resuming=true;
+      const elapsed=context.currentTime-test.pausedAt;
+      report('keepalivePlay',{play:elapsed>=5?'clockAdvancing':'clockStopped'});
+      status.textContent='Play received. Silent render clock advanced '+elapsed.toFixed(1)+' seconds.';
+      void audio.play().catch(error=>{
+        test.resuming=false;
+        status.textContent='The native player rejected Play: '+error.name;
+        report('keepaliveResumeError');
+      });
+    });
+    test.timer=setInterval(()=>{
+      if(keepalive!==test||test.pausedAt===null||!audio.paused)return;
+      const elapsed=context.currentTime-test.pausedAt;
+      session.playbackState='paused';
+      session.setPositionState?.({duration:120,position:Math.min(120,Math.max(0,elapsed)),playbackRate:1});
+    },500);
+    void Promise.all([context.resume(),audio.play()]).catch(error=>{
+      if(keepalive!==test)return;
+      stopTestPlayback();
+      status.textContent='Could not start the test: '+error.name;
+    });
+  } catch(error) {
+    stopTestPlayback();
+    status.textContent='Could not set up the test: '+error.message;
+  }
+}
+startTest.onclick=startKeepaliveTest;
+stopTest.onclick=stopTestPlayback;
+window.addEventListener('pagehide',stopKeepalive);
+navigator.audioSession?.addEventListener?.('statechange',()=>{
+  if(keepalive&&navigator.audioSession.state==='interrupted')stopTestPlayback();
+});
+
+function report(action,extra={}){if(source==='none')return;fetch('/api/player-controls-diagnostic',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({build:'native-baseline-3',event:'command',standalone,details:{action,source,visibility:document.visibilityState,...extra}}),keepalive:true}).catch(()=>{});}
+function cancelProbe(){if(probe!==null)clearTimeout(probe);probe=null;}
+function load(url,kind){stopKeepalive();cancelProbe();audio.pause();if(objectUrl)URL.revokeObjectURL(objectUrl);objectUrl=kind==='baselineLocal'?url:null;source=kind;audio.src=url;audio.load();status.textContent=(kind==='baselineLocal'?'Saved song':kind==='baselineMp3'?'MP3 sample':kind==='baselineAac'?'AAC sample':'HTTP sample')+' loaded. Press Play in the native controls.';report('baselineLoaded');}
+document.querySelector('#mp3').onclick=()=>load('/diagnostics/native-tone.mp3','baselineMp3');
+document.querySelector('#aac').onclick=()=>load('/diagnostics/native-tone.m4a','baselineAac');
+document.querySelector('#http').onclick=()=>load('/diagnostics/native-tone.wav','baselineHttp');
+function request(r){return new Promise((resolve,reject)=>{r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});}
+async function openLibrary(){return new Promise((resolve,reject)=>{const r=indexedDB.open('personal-music-player-db');r.onupgradeneeded=()=>{r.transaction.abort();reject(Error('No existing Sonora library on this origin'));};r.onerror=()=>reject(r.error);r.onsuccess=()=>resolve(r.result);});}
+(async()=>{try{db=await openLibrary();db.onversionchange=()=>db.close();if(!db.objectStoreNames.contains('audioBlobs'))throw Error('No saved audio store');const keys=await request(db.transaction('audioBlobs','readonly').objectStore('audioBlobs').getAllKeys(null,60));saved.replaceChildren();for(const key of keys){let track=null;if(db.objectStoreNames.contains('tracks'))track=await request(db.transaction('tracks','readonly').objectStore('tracks').get(key));const option=document.createElement('option');option.value=String(key);option.textContent=track?.title||String(key);saved.append(option);}if(!keys.length)throw Error('No saved audio found');saved.disabled=false;local.disabled=false;}catch(error){saved.replaceChildren(new Option('No saved audio available',''));saved.disabled=true;local.disabled=true;}})();
+local.onclick=async()=>{try{const record=await request(db.transaction('audioBlobs','readonly').objectStore('audioBlobs').get(saved.value));if(!(record?.blob instanceof Blob))throw Error('Saved audio is unavailable');load(URL.createObjectURL(record.blob),'baselineLocal');}catch(error){status.textContent=error.message;}};
+audio.addEventListener('play',()=>{cancelProbe();const start=audio.currentTime;report('baselinePlay');probe=setTimeout(()=>{probe=null;const moving=audio.currentTime>start+.1;report('baselineClock',{play:moving?'clockAdvancing':'clockStopped',pause:audio.paused?'nativePaused':'nativePlaying'});status.textContent=moving?'Native audio clock is advancing.':'Native audio clock is stopped despite Play.';},1500);});
+audio.addEventListener('pause',()=>{
+  cancelProbe();
+  report('baselinePause');
+  if(!keepalive||!audio.paused)return;
+  keepalive.pausedAt=keepalive.context.currentTime;
+  navigator.mediaSession.playbackState='paused';
+  navigator.mediaSession.metadata=new MediaMetadata({title:'Paused · Sonora silent-loop test'});
+  status.textContent='Tone paused. Wait ten seconds before pressing Play on the lock screen.';
+});
+audio.addEventListener('playing',()=>{
+  report('baselinePlaying');
+  if(!keepalive)return;
+  if(keepalive.pausedAt!==null){
+    keepalive.pausedAt=null;
+    keepalive.resuming=false;
+    navigator.mediaSession.setPositionState?.();
+    navigator.mediaSession.metadata=new MediaMetadata({title:'Sonora silent-loop test'});
+  }
+  navigator.mediaSession.playbackState='playing';
+});
+audio.addEventListener('error',()=>{cancelProbe();status.textContent='Native media error '+(audio.error?.code||'unknown');report('baselineError');});
+audio.addEventListener('ended',()=>{stopKeepalive();cancelProbe();report('baselineEnded');});
+</script></body></html>

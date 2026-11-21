@@ -5,7 +5,7 @@ export const formatTime = (seconds: number) => {
   return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, '0')}`;
 };
 export function SeekBar({ compact = false }: { compact?: boolean }) {
-  const { currentTime, duration, seek } = usePlayer();
+  const { currentTime, duration, seek } = usePlayer({subscribeQueue:false});
   const [scrub, setScrub] = useState<number | null>(null);
   const dragging = useRef(false);
   const value = scrub ?? Math.min(currentTime, duration || 0);

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 760">
+  <defs>
+    <linearGradient id="sky" x2=".24" y2="1"><stop stop-color="#a04753"/><stop offset=".58" stop-color="#492339"/><stop offset="1" stop-color="#201c29"/></linearGradient>
+    <radialGradient id="haze"><stop stop-color="#d57168" stop-opacity=".53"/><stop offset="1" stop-color="#492339" stop-opacity="0"/></radialGradient>
+    <pattern id="print" width="9" height="9" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.1" fill="#0c1021" opacity=".35"/></pattern>
+  </defs>
+  <path d="M0 0h1000v760H0z" fill="url(#sky)"/>
+  <ellipse cx="525" cy="330" rx="510" ry="370" fill="url(#haze)"/>
+  <g><circle cx="144" cy="302" r="64" fill="#d36265"/><path d="M0 201l190-20 202 16 79 30-270-23-201 27zm602-9 168-55 230-18v26l-213 10-139 54z" fill="#dc7d6c" opacity=".38"/></g>
+  <g><path d="M0 406v-83h92v33h59v-85h44v17h58v113h93v-46h66v28h47v-62h95v67h64v-45h106v-64h67v31h66v-68h84v153h59v365H0Z" fill="#542d42"/></g>
+  <g><path d="M0 373h160l28 39v151l118 66v131H0zm1000-43H841l-22 47v138l-112 54v191h293z" fill="#191721"/><path d="M0 390h158l16 35m826-82H850l-18 40M0 568h173l115 68m712-118H844l-121 60" fill="none" stroke="#a45c61" stroke-width="7"/><path d="M44 433h91v78H44zm832-37h76v77h-76z" fill="#472735"/><path d="M18 431h140m-140 39h140m-140 40h140m-127-79 100 39-100 40m811-107h141m-141 45h141m-141 45h141m-132-90 116 45-116 45" fill="none" stroke="#b96e68" stroke-width="3" opacity=".63"/></g>
+  <path d="M0 581 234 760H0zm1000-135L716 760h284z" fill="url(#print)"/>
+</svg>

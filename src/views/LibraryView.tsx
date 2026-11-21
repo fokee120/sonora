@@ -2,26 +2,35 @@ import React, { useState } from 'react';
 import {usePlayer} from '../hooks/usePlayer.js';
 import {sortPlaylistTracks} from '../lib/playlistOrder.js';
 import {notify} from '../components/common/ToastHost.js';
-import { Play, Pause, Shuffle, Loader2, Plus, ListMusic, Heart, Pin, ArrowDownToLine, Search, ArrowDownUp } from 'lucide-react';
+import { Play, Pause, Shuffle, Loader2, Plus, ListMusic, Heart, Pin, ArrowDownToLine, Search, ArrowDownUp, Disc3 } from 'lucide-react';
 import { useApp } from '../context/AppContext.js';
 import { TrackRow } from '../components/common/TrackRow.js';
 import { ImportPlaylistModal } from '../components/playlist/ImportPlaylistModal.js';
 import { PlaylistCover } from '../components/common/PlaylistCover.js';
+import { AlbumCards } from '../components/common/CatalogCards.js';
+
+const tabLabels = { playlists: 'Playlists', songs: 'Songs', albums: 'Albums' } as const;
+type LibraryTab = keyof typeof tabLabels;
+
 export const LibraryView: React.FC = () => {
-  const { displayTracks, displayPlaylists, navigate, openCreatePlaylist } = useApp();
+  const { displayTracks, displayPlaylists, displayAlbums, navigate, openCreatePlaylist } = useApp();
   const {playPlaylist,playlistId:activePlaylist,isPlaying,isLoading,togglePlay}=usePlayer();
-  const [tab, setTab] = useState<'playlists' | 'songs'>('playlists');
+  const [tab, setTab] = useState<LibraryTab>('playlists');
   const [importOpen, setImportOpen] = useState(false);
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState(() => localStorage.getItem('playlist-sort') || 'recent');
   const sorted = [...displayPlaylists].filter(p => p.title.toLowerCase().includes(filter.toLowerCase())).sort((a,b) => Number(!!b.pinnedAt)-Number(!!a.pinnedAt) || (a.pinnedAt && b.pinnedAt ? b.pinnedAt-a.pinnedAt : sort === 'alphabetical' ? a.title.localeCompare(b.title) : (b.lastPlayedAt || b.updatedAt)-(a.lastPlayedAt || a.updatedAt)));
   const songs = displayTracks.filter(t => (t.title + ' ' + t.artist).toLowerCase().includes(filter.toLowerCase()));
+  const albums = [...displayAlbums]
+    .filter(album => (album.title + ' ' + album.artist).toLowerCase().includes(filter.toLowerCase()))
+    .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0) || a.title.localeCompare(b.title));
+  const counts = { playlists: displayPlaylists.length, songs: displayTracks.length, albums: displayAlbums.length };
   return <div id="library-view" className="page-stack">
-    <header className="page-heading"><div><p className="eyebrow">YOUR COLLECTION</p><h1>Library</h1></div><button className="player-icon outlined-icon" aria-label="New playlist" title="New playlist" onClick={() => openCreatePlaylist()}><Plus size={22} /></button></header>
-    <div role="tablist" aria-label="Library categories" className="segmented-tabs library-tabs" data-active-tab={tab}><span className="library-tab-indicator" aria-hidden="true" />{(['playlists', 'songs'] as const).map(value => <button key={value} role="tab" aria-selected={tab === value} onClick={() => { setTab(value); setFilter(''); }}><span>{value === 'playlists' ? 'Playlists' : 'Songs'}</span></button>)}</div>
-    <div key={tab} role="tabpanel" aria-label={tab} className={'library-panel library-panel-' + tab + ' section-stack'}>
-      <div className="library-toolbar"><span className="collection-count">{tab === 'playlists' ? displayPlaylists.length + ' playlists' : displayTracks.length + ' songs'}</span>{tab === 'playlists' && <label className="sort-control"><ArrowDownUp size={14} /><select aria-label="Sort playlists" value={sort} onChange={e => { setSort(e.target.value); localStorage.setItem('playlist-sort', e.target.value); }}><option value="recent">Recent</option><option value="alphabetical">Alphabetical</option></select></label>}<button className="text-button" onClick={() => setImportOpen(true)}><ArrowDownToLine size={15} />Import</button></div>
-      {(tab === 'songs' || displayPlaylists.length > 5) && <div className="search-field compact-search"><Search size={18} /><input aria-label={'Filter ' + tab} placeholder={'Find in your ' + tab + '…'} value={filter} onChange={e => setFilter(e.target.value)} /></div>}
+    <header className="page-heading"><div><p className="eyebrow">YOUR COLLECTION</p><h1>Library</h1></div>{tab !== 'albums' && <button className="player-icon outlined-icon" aria-label="New playlist" title="New playlist" onClick={() => openCreatePlaylist()}><Plus size={22} /></button>}</header>
+    <div role="tablist" aria-label="Library categories" className="segmented-tabs library-tabs" data-active-tab={tab}><span className="library-tab-indicator" aria-hidden="true" />{(Object.keys(tabLabels) as LibraryTab[]).map(value => <button key={value} role="tab" aria-selected={tab === value} onClick={() => { setTab(value); setFilter(''); }}><span>{tabLabels[value]}</span></button>)}</div>
+    <div key={tab} role="tabpanel" aria-label={tabLabels[tab]} className={'library-panel library-panel-' + tab + ' section-stack'}>
+      <div className="library-toolbar"><span className="collection-count">{counts[tab]} {counts[tab] === 1 ? tab.slice(0, -1) : tab}</span>{tab === 'playlists' && <label className="sort-control"><ArrowDownUp size={14} /><select aria-label="Sort playlists" value={sort} onChange={e => { setSort(e.target.value); localStorage.setItem('playlist-sort', e.target.value); }}><option value="recent">Recent</option><option value="alphabetical">Alphabetical</option></select></label>}{tab !== 'albums' && <button className="text-button" onClick={() => setImportOpen(true)}><ArrowDownToLine size={15} />Import</button>}</div>
+      {(tab === 'songs' || counts[tab] > 5) && <div className="search-field compact-search"><Search size={18} /><input aria-label={'Filter ' + tab} placeholder={'Find in your ' + tab + '…'} value={filter} onChange={e => setFilter(e.target.value)} /></div>}
       {tab === 'playlists' ? <>
         {!displayPlaylists.length && <div className="empty-state"><span className="empty-icon"><ListMusic size={28} /></span><h2>A place for every mood.</h2><p>Make a playlist from scratch or bring your favorites with you.</p><button className="primary-button" onClick={() => openCreatePlaylist()}><Plus size={17} />Create a playlist</button></div>}
         <div className="playlist-library-list">{sorted.map(playlist => {
@@ -33,7 +42,14 @@ export const LibraryView: React.FC = () => {
           </div>;
         })}</div>
         {!!filter && !sorted.length && <div className="empty-state"><p>No playlists match “{filter}”.</p></div>}
-      </> : <>
+      </> : tab === 'albums' ? (
+        albums.length ? <AlbumCards fromLibrary albums={albums.map(album => ({ ...album, browseId: album.id }))} /> :
+        <div className="empty-state"><Disc3 size={27} />
+          <h2>{filter ? 'No matching albums' : 'Save your favorite albums'}</h2>
+          <p>{filter ? 'Try another album or artist.' : 'Open an album and choose Save to Library.'}</p>
+          {!filter && <button className="action-button" onClick={() => navigate({ type: 'search' })}>Search music</button>}
+        </div>
+      ) : <>
         <button className="liked-collection" onClick={() => navigate({ type: 'liked' })}><span className="shortcut-icon favorite-icon"><Heart size={22} fill="currentColor" /></span><span><strong>Liked songs</strong><small>All your favorites, together</small></span></button>
         {!songs.length ? <div className="empty-state"><Search size={25} /><h2>{filter ? 'Nothing here yet' : 'Keep your favorites close.'}</h2><p>{filter ? 'Try a different song or artist.' : 'Songs you play, save, or download appear here.'}</p>{!filter && <button className="action-button" onClick={() => navigate({ type: 'search' })}>Discover music</button>}</div> : <div className="song-list">{songs.map((track, index) => <TrackRow key={track.id} track={track} index={index} tracksContext={songs} />)}</div>}
       </>}

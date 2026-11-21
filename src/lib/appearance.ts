@@ -1,7 +1,8 @@
+import { COMIC_HEROES, comicHero, type ComicHeroId } from './comicHeroes.js';
 import { useSyncExternalStore } from 'react';
 import { dbService } from './db.js';
 
-export type ThemeStyle = 'classic' | 'notebook' | 'retro' | 'gotham' | 'pink';
+export type ThemeStyle = 'classic' | 'notebook' | 'retro' | 'gotham' | 'pink' | 'comics' | 'aero';
 export const THEMES: readonly {id:string;name:string;background:string;accent:string;style:ThemeStyle;description:string}[] = [
  { id:'notebook',name:'Notebook',background:'#f4efdf',accent:'#375b9b',style:'notebook',description:'Paper, ink & handwritten notes' },
  { id:'retro',name:'Retro',background:'#15172e',accent:'#d9fa70',style:'retro',description:'Pixel type & arcade controls' },
@@ -17,11 +18,13 @@ export const VISUAL_THEMES = [
  {id:'notebook',name:'Notebook',background:'#f4efdf',accent:'#375b9b',description:'Paper, ink & handwritten notes'},
  {id:'retro',name:'Retro',background:'#15172e',accent:'#d9fa70',description:'Pixel type & arcade controls'},
  {id:'pink',name:'Pink Energy',background:'#fff0f6',accent:'#c72e78',description:'Kitten kisses, bows & cherry-pink dreams'},
+ {id:'aero',name:'Frutiger Aero',background:'#7bd2ef',accent:'#126b94',description:'Sunlit coastlines & polished glass'},
+ {id:'comics',name:'Comics',background:'#14253f',accent:'#f71920',description:'Comic-book scrapbook'},
  {id:'gotham',name:'Gotham Nights',background:'#0c1421',accent:'#d7b477',description:'Lamplight, vinyl & midnight jazz'},
 ] as const;
 export const PALETTES = THEMES.filter(theme=>theme.style==='classic');
-export type Appearance = { preset:string; style:ThemeStyle; customColors?:{accent:string;background:string}; accent:string; background:string; hasPhoto:boolean; dim:number; blur:number; pinkMode:'light'|'dark' };
-const defaults:Appearance={preset:'default',style:'classic',accent:'#b8e4cc',background:'#101312',hasPhoto:false,dim:.7,blur:0,pinkMode:'light'};
+export type Appearance = { preset:string; style:ThemeStyle; customColors?:{accent:string;background:string}; accent:string; background:string; hasPhoto:boolean; dim:number; blur:number; pinkMode:'light'|'dark'; comicHeroId:ComicHeroId };
+const defaults:Appearance={preset:'default',style:'classic',accent:'#b8e4cc',background:'#101312',hasPhoto:false,dim:.7,blur:0,pinkMode:'light',comicHeroId:COMIC_HEROES[0].id};
 const KEY='sonora:appearance:v1', PHOTO='sonora:appearance:photo';
 const valid=(v:unknown):v is string=>typeof v==='string'&&/^#[a-f0-9]{6}$/i.test(v);
 function read():Appearance {
@@ -29,13 +32,16 @@ function read():Appearance {
   const saved=JSON.parse(localStorage.getItem(KEY)||'null');if(!saved)return defaults;
   const style=VISUAL_THEMES.some(theme=>theme.id===saved.style)?saved.style:THEMES.find(theme=>theme.id===saved.preset)?.style??'classic';
   const pinkMode=saved.pinkMode==='dark'||saved.pinkMode==='light'?saved.pinkMode:style==='pink'&&valid(saved.background)&&luminance(saved.background)<=.38?'dark':'light';
-  const theme=getThemeColors(style,pinkMode);
-  const accent=valid(saved.accent)?saved.accent:theme.accent,background=valid(saved.background)?saved.background:theme.background;
+  const comicHeroId=comicHero(saved.comicHeroId).id;
+  const theme=getThemeColors(style,pinkMode,comicHeroId);
+  const themeDefaults=(style==='comics'||style==='aero')&&saved.preset==='default';
+  const accent=!themeDefaults&&valid(saved.accent)?saved.accent:theme.accent;
+  const background=!themeDefaults&&valid(saved.background)?saved.background:theme.background;
   const legacyDefault=['notebook','retro'].includes(saved.preset)||(saved.preset==='forest'&&style==='classic');
   const preset=legacyDefault?(accent===theme.accent&&background===theme.background?'default':'custom')
    :saved.preset==='default'||saved.preset==='custom'||PALETTES.some(palette=>palette.id===saved.preset)?saved.preset:'custom';
   const customColors=valid(saved.customColors?.accent)&&valid(saved.customColors?.background)?saved.customColors:preset==='custom'?{accent,background}:undefined;
-  return {...defaults,style,preset,accent,background,customColors,pinkMode,hasPhoto:!!saved.hasPhoto,
+  return {...defaults,style,preset,accent,background,customColors,pinkMode,comicHeroId,hasPhoto:!!saved.hasPhoto,
    dim:Number.isFinite(saved.dim)?Math.max(.2,Math.min(.95,saved.dim)):defaults.dim,blur:Number.isFinite(saved.blur)?Math.max(0,Math.min(24,saved.blur)):0};
  }catch{return defaults;}
 }
@@ -49,10 +55,14 @@ function luminance(hex:string){const [r,g,b]=rgb(hex).map(v=>{const n=v/255;retu
 let current=read(),photoUrl:string|null=null,initialized=false;
 function apply(){
  const root=document.documentElement,bg=current.background,light=luminance(bg)>.38;
- const ink=light?(current.style==='notebook'?'#29394d':current.style==='pink'?'#662546':'#17201a'):(current.style==='pink'?'#ffe4f0':'#f1f5f2'),opposite=light?'#000000':'#ffffff';
+ const ink=light?(current.style==='notebook'?'#29394d':current.style==='pink'?'#662546':current.style==='aero'?'#153648':'#17201a'):(current.style==='pink'?'#ffe4f0':'#f1f5f2'),opposite=light?'#000000':'#ffffff';
  let readable=current.accent;
  for(let i=0;i<10;i++){const a=luminance(readable),b=luminance(bg);if((Math.max(a,b)+.05)/(Math.min(a,b)+.05)>=4.5)break;readable=mix(readable,ink,.2);}
+ const hero=comicHero(current.comicHeroId);
  const vars:Record<string,string>={
+  '--comic-cover':'url("'+hero.displayArt+'")',
+  '--comic-world':'url("'+hero.world+'")',
+  '--comic-secondary':hero.secondary,
   '--bg':bg,'--surface':mix(bg,opposite,.045),'--surface-active':mix(bg,opposite,.11),'--surface-raised':mix(bg,opposite,.065),
   '--accent':current.accent,'--accent-readable':readable,'--accent-on':luminance(current.accent)>.2?(current.style==='pink'?'#4b1834':'#142018'):'#ffffff',
   '--text-primary':ink,'--text-dim':mix(ink,bg,.38),'--text-muted':mix(ink,bg,.5),'--border':mix(bg,ink,.11),
@@ -63,7 +73,10 @@ function apply(){
  for(const [key,value]of Object.entries(vars))root.style.setProperty(key,value);
  for(const family of ['blue','indigo'])for(const [shade,fraction]of [[200,.25],[300,.1],[400,0],[500,-.18],[600,-.5],[700,-.65],[800,-.75],[950,-.9]] as const)root.style.setProperty('--color-'+family+'-'+shade,fraction>=0?mix(readable,ink,fraction):mix(bg,readable,1+fraction));
  for(const [shade,amount]of [[50,.97],[100,.92],[200,.8],[300,.7],[400,.56],[500,.43],[600,.3],[700,.2],[800,.1],[900,.045],[950,.012]] as const)root.style.setProperty('--color-zinc-'+shade,mix(bg,ink,amount));
- root.dataset.pinkMode=current.pinkMode;root.dataset.theme=current.preset;root.dataset.style=current.style;root.dataset.photo=String(!!photoUrl&&current.hasPhoto);root.style.colorScheme=light?'light':'dark';
+ root.dataset.pinkMode=current.pinkMode;root.dataset.theme=current.preset;root.dataset.style=current.style;
+ if(current.style==='comics')root.dataset.comicHero=hero.id;
+ else delete root.dataset.comicHero;
+ root.dataset.photo=String(!!photoUrl&&current.hasPhoto);root.style.colorScheme=light?'light':'dark';
  document.querySelector('meta[name="theme-color"]')?.setAttribute('content',bg);
  for(const listener of listeners)listener();
 }
@@ -74,7 +87,8 @@ export function updateAppearance(patch:Partial<Appearance>){
  if(!valid(next.accent)||!valid(next.background))throw Error('Choose a valid color.');
  localStorage.setItem(KEY,JSON.stringify(next));current=next;apply();
 }
-export function getThemeColors(style:ThemeStyle,mode:'light'|'dark'='light'){
+export function getThemeColors(style:ThemeStyle,mode:'light'|'dark'='light',heroId:ComicHeroId=COMIC_HEROES[0].id){
+ if(style==='comics')return comicHero(heroId);
  const theme=VISUAL_THEMES.find(theme=>theme.id===style)!;
  return style==='pink'&&mode==='dark'?{...theme,background:'#1f1420',accent:'#f29bc4'}:theme;
 }
@@ -84,11 +98,15 @@ export function setPinkMode(mode:'light'|'dark'){
 }
 export function chooseTheme(id:string){
  const theme=VISUAL_THEMES.find(theme=>theme.id===id);
- if(theme){const colors=getThemeColors(theme.id,current.pinkMode);updateAppearance({preset:'default',style:theme.id,accent:colors.accent,background:colors.background});}
+ if(theme){const colors=getThemeColors(theme.id,current.pinkMode,current.comicHeroId);updateAppearance({preset:'default',style:theme.id,accent:colors.accent,background:colors.background});}
  else choosePalette(id);
 }
+export function chooseComicHero(id:ComicHeroId){
+ const hero=comicHero(id);
+ updateAppearance({style:'comics',comicHeroId:hero.id,preset:'default',accent:hero.accent,background:hero.background});
+}
 export function choosePalette(id:string){
- const palette=id==='default'?getThemeColors(current.style,current.pinkMode):id==='custom'?(current.customColors??current):PALETTES.find(palette=>palette.id===id);
+ const palette=id==='default'?getThemeColors(current.style,current.pinkMode,current.comicHeroId):id==='custom'?(current.customColors??current):PALETTES.find(palette=>palette.id===id);
  if(palette)updateAppearance({preset:id,accent:palette.accent,background:palette.background});
 }
 export async function setBackgroundPhoto(file:File){

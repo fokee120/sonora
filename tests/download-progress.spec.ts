@@ -3,13 +3,19 @@ import { readFileSync } from 'node:fs';
 test.use({ serviceWorkers: 'block' });
 const track = { id: 'ytm:abcdefghijk', source: 'ytmusic', sourceId: 'abcdefghijk', cloudKey: 'ytmusic://abcdefghijk', title: 'Capture progress test', artist: 'Fixture', album: 'Tests', duration: 3 };
 async function setup(page: any) {
-  await page.route('**/api/**', (route: any) => route.fulfill({ json: { user: null, authRequired: false, tracks: [track], albums: [], artists: [] } }));
+  await page.route('**/api/**', (route: any) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/account/session') return route.fulfill({ json: { profile: { uid: 'download-progress-fixture' }, expiresAt: Date.now() + 86400000 } });
+    if (path === '/api/account/library') return route.fulfill({ json: { unchanged: true } });
+    return route.fulfill({ json: { status: 'ok', tracks: [], songs: [], albums: [], artists: [] } });
+  });
   await page.goto('/');
+  await expect(page.getByRole('navigation', { name: /^(Main|Desktop) navigation$/ })).toBeVisible();
   await page.evaluate(async track => {
     const path = '/src/lib/db.ts'; const db = await import(path); await db.dbService.saveTracks([track]);
   }, track);
   await page.reload();
-  await page.locator('#nav-library').click();
+  await page.getByRole('navigation', { name: /^(Main|Desktop) navigation$/ }).getByRole('button', { name: 'Library', exact: true }).click();
   await page.locator('#library-view').getByRole('tab', { name: 'Songs', exact: true }).click();
   await expect(page.locator('#library-view').getByText(track.title, { exact: true })).toBeVisible();
 }
@@ -33,9 +39,7 @@ test('reported direct transfer advances before headers, finalizing stays below 1
   await page.evaluate(async track => { const p = '/src/lib/offline/OfflineManager.ts'; await (await import(p)).offlineManager.downloadTrack(track); }, track);
   await expect.poll(async () => (await state(page)).state?.progress).toBe(47);
   const row = page.locator("#library-view").locator(`[id="track-row-${track.id}"]`).first();
-  await expect(row.getByRole('status')).toContainText('Downloading audio file');
-  await expect(row.getByRole('status')).toContainText('1.0 KB / 2.0 KB');
-  await expect(row.getByRole('button', { name: 'Cancel download' })).toContainText('47%');
+  await expect(row.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '47');
   expect((await state(page)).stored).toBe(false);
   phase = 'finalizing';
   await expect.poll(async () => (await state(page)).state?.phase).toBe('finalizing');
@@ -46,17 +50,18 @@ test('reported direct transfer advances before headers, finalizing stays below 1
   const stoppedAt = polls; await page.waitForTimeout(1100); expect(polls).toBe(stoppedAt);
 });
 test('download completes when secure-context randomUUID is unavailable', async ({ page }) => {
-  await page.addInitScript(() => {
+  await setup(page);
+  await page.evaluate(() => {
     Object.defineProperty(globalThis.crypto, 'randomUUID', { value: undefined, configurable: true });
   });
-  await setup(page);
   let requestId: string | null = null;
   await page.route('**/api/ytmusic/download-status/**', route => route.fulfill({ json: { phase: 'finalizing', progress: 95, recordedSeconds: 3, sourceDuration: 3 } }));
   await page.route('**/api/ytmusic/download/**', route => {
     requestId = new URL(route.request().url()).searchParams.get('requestId');
     return route.fulfill({ body: readFileSync(new URL('./fixtures/offline-complete.webm', import.meta.url)), headers: { 'content-type': 'audio/webm' } });
   });
-  await page.locator(`[id="track-row-${track.id}"]`).first().getByTitle('Download for offline playback').click();
+  await page.locator(`[id="track-row-${track.id}"]`).first().getByTitle('More options').click();
+  await page.getByRole('dialog', { name: 'Options for ' + track.title }).getByRole('button', { name: 'Download song', exact: true }).click();
   await expect.poll(async () => (await state(page)).state?.status).toBe('completed');
   expect(requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   expect((await state(page)).stored).toBe(true);
@@ -69,7 +74,8 @@ test('cancel at zero clears polling and does not save', async ({ page }) => {
   await page.route('**/api/ytmusic/download/**', async route => { await new Promise(resolve => setTimeout(resolve, 2000)); await route.abort().catch(() => {}); });
   await page.evaluate(async track => { const p = '/src/lib/offline/OfflineManager.ts'; await (await import(p)).offlineManager.downloadTrack(track); }, track);
   await expect.poll(() => polls).toBeGreaterThan(0);
-  await page.locator(`[id="track-row-${track.id}"]`).first().getByRole('button', { name: 'Cancel download' }).click();
+  await page.locator(`[id="track-row-${track.id}"]`).first().getByTitle('More options').click();
+  await page.getByRole('dialog', { name: 'Options for ' + track.title }).getByRole('button', { name: 'Cancel download', exact: true }).click();
   await expect.poll(async () => (await state(page)).state).toBeUndefined();
   const stoppedAt = polls; await page.waitForTimeout(1100); expect(polls).toBe(stoppedAt);
   expect((await state(page)).stored).toBe(false);

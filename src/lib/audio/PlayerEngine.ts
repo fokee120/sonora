@@ -1,13 +1,18 @@
+import {authorizeSharedPlayback} from '../sharedPlayback.js';
+import {hasAccountAccess} from '../cloudAccount.js';
+import {silentPauseEnabled} from './playbackPreferences.js';
+import {pausedArtwork} from './pausedArtwork.js';
+import {beginPlaybackTiming,playbackTiming} from './playbackTimings.js';
 import {isServerOnline,subscribeConnection,checkServerConnection} from '../serverConnection.js';
 import { audioCache } from '../offline/AudioCache.js';
 import { Track, PlayerState, RepeatMode, QueueItem, QueueSource } from '../../types/index.js';
 import { offlineManager } from '../offline/OfflineManager.js';
-import { dbService } from '../db.js';
-import { youtubeStreamUrl, bridgeHeaders, prepareYoutubeBridge, fetchYoutubeAudio } from './audioSource.js';
+import { dbService, getDB } from '../db.js';
+import { youtubeStreamUrl } from './audioSource.js';
 import { isYoutubeTrack } from '../ytmusic/youtubeMusic.js';
 import { logPerf, perfNow } from '../perf.js';
 import { cacheArtwork, highQualityArtwork, readArtwork } from '../artwork.js';
-import { reportMediaControls } from './mediaControlsDiagnostics.js';
+import { reportMediaControls, observeRemoteResume } from './mediaControlsDiagnostics.js';
 import { assertAudioDuration, validateAudioBlob } from '../offline/audioCompleteness.js';
 
 type StateListener = (state: PlayerState) => void;
@@ -26,6 +31,7 @@ export class PlayerEngine {
 
   private queue: QueueItem[] = [];
   private currentQueueIndex = -1;
+  private completionRecorded = false;
   private recommendationTails = new Map<string, { ids: string[]; tracks: Track[] }>();
   public setPlaylistRecommendations(id: string, ids: string[], tracks: Track[]) { this.recommendationTails.set(id, {ids, tracks}); void dbService.setSetting('playlist_recommendations', [...this.recommendationTails.entries()]); }
   private extendWithRecommendations() {
@@ -37,7 +43,7 @@ export class PlayerEngine {
       const extra = tail.tracks.filter(track => { if (seen.has(track.id)) return false; seen.add(track.id); return true; });
       if (extra.length) {
         const start = Math.max(-1, ...context.map(item => item.contextIndex!)) + 1;
-        this.queue.push(...extra.map((track, index) => ({track, queueId: crypto.randomUUID(), contextIndex: start + index})));
+        this.queue = [...this.queue, ...extra.map((track, index) => ({track, queueId: crypto.randomUUID(), contextIndex: start + index}))];
         this.notifyQueue();
       }
       break;
@@ -110,6 +116,120 @@ export class PlayerEngine {
     if (resume && previous.playing && previous.track) await this.loadTrack(previous.track, undefined, previous.position, true);
   }
 
+  private playbackPreferencesListener = (() => {
+    window.addEventListener('sonora:playback-preferences', () => {
+      if (silentPauseEnabled()) return;
+      if (this.silentPause) this.pause({ hard: true });
+      else this.stopSilentContext();
+    });
+    return true;
+  })();
+  private accountAccessListener=(()=>{window.addEventListener('sonora:account-access',()=>{if(!hasAccountAccess())this.pause({hard:true});});return true;})();
+  private silentPause=false;
+  private silentContext: AudioContext | null = null;
+  private silentTimer: ReturnType<typeof setInterval> | null = null;
+  private silentClockOrigin = 0;
+  private silentClockSecond = -1;
+
+  private primeSilentContext(): void {
+    if (!isIOS() || !silentPauseEnabled() || this.previewSession || !('mediaSession' in navigator)
+      || (navigator as any).audioSession?.state === 'interrupted') return;
+    if (this.silentContext) return;
+    const Context = window.AudioContext ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Context) return;
+    try {
+      const context = new Context();
+      this.silentContext = context;
+      // Render real zero samples without creating a second Now Playing element.
+      const loop = context.createBufferSource();
+      loop.buffer = context.createBuffer(1, context.sampleRate, context.sampleRate);
+      loop.loop = true;
+      loop.connect(context.destination);
+      loop.start();
+      context.addEventListener('statechange', () => {
+        // The renderer can suspend separately from the native music element.
+        if (this.silentContext === context && this.silentPause) this.syncSilentPauseTransport();
+      });
+      void context.resume().catch(() => {
+        if (this.silentContext === context) this.stopSilentContext();
+      });
+    } catch {
+      this.stopSilentContext();
+    }
+  }
+
+  private stopSilentContext(): void {
+    const context = this.silentContext;
+    this.silentContext = null;
+    if (context && context.state !== 'closed') void context.close().catch(() => {});
+  }
+  private pauseArtwork='';
+  private showPausedArtwork():void {
+    if(!this.silentPause||!('mediaSession' in navigator))return;
+    try {
+      const theme=document.documentElement.dataset.style||'classic';
+      this.pauseArtwork=pausedArtwork[theme]||pausedArtwork.classic;
+      navigator.mediaSession.metadata=new MediaMetadata({title:'Paused',artist:this.state.currentTrack?.title||'Sonora',artwork:[{src:this.pauseArtwork,sizes:'1248x1248',type:'image/png'}]});
+      navigator.mediaSession.setPositionState?.();
+    }catch{}
+  }
+  private syncSilentPauseTransport(): void {
+    if (!this.silentPause) return;
+    this.updateMediaSessionPlaybackState('paused');
+    const context = this.silentContext;
+    if (context?.state !== 'running' || (navigator as any).audioSession?.state === 'interrupted') return;
+
+    const duration = 120;
+    const position = (context.currentTime - this.silentClockOrigin) % duration;
+    const second = Math.floor(position);
+    if (second === this.silentClockSecond) return;
+    this.silentClockSecond = second;
+    try {
+      navigator.mediaSession.setPositionState?.({ duration, position, playbackRate: 1 });
+    } catch { /* Position reporting is optional. */ }
+  }
+
+  private endSilentPause(): void {
+    this.silentPause = false;
+    if (this.silentTimer !== null) clearInterval(this.silentTimer);
+    this.silentTimer = null;
+    this.publishedMetadata = '';
+    if (this.state.currentTrack) this.updateMediaSessionMetadata(this.state.currentTrack);
+    this.updateMediaSessionPosition();
+    // Keep the render loop armed. Closing it here makes the next background
+    // pause depend on starting a new AudioContext from the lock screen.
+  }
+
+  private handleAudioInterruption(): void {
+    if (!this.silentContext) return;
+    // Keep the loop available, but let iOS suspend or release the audio route.
+    // Requesting resume here could stop the other app's audio.
+    if (this.silentPause || this.wantsPlayback) this.pause();
+  }
+
+  private trySilentPause(): boolean {
+    const context = this.silentContext;
+    if (!context || context.state === 'closed' || (context.state !== 'running' && context.currentTime === 0)
+      || !silentPauseEnabled() || !this.wantsPlayback || this.audio.ended || !this.sourceAssigned
+      || !this.state.currentTrack || this.previewSession || this.state.isLoading || this.audio.error) return false;
+    this.silentClockOrigin = context.currentTime;
+    this.silentClockSecond = -1;
+    this.silentPause = true;
+    this.wantsPlayback = false;
+    this.state.isPlaying = false;
+    this.state.isLoading = false;
+    this.clearLoadingTimeout();
+    this.pausedAt = Date.now();
+    this.state.currentTime = this.sourceOffset + this.audio.currentTime;
+    this.persistPosition(true);
+    this.audio.pause();
+    this.showPausedArtwork();
+    this.setupMediaSession(true);
+    this.silentTimer = setInterval(() => this.syncSilentPauseTransport(), 500);
+    this.notifyState();
+    return true;
+  }
+
   private pausedAt:number|null=null;
   private lastPositionWrite=0;
   private resumeBuffer:{id:string;duration:number;url:string;source:'local'|'cloud'}|null=null;
@@ -132,7 +252,7 @@ export class PlayerEngine {
     const controller=this.loadController;
     this.resumeRead=(async()=>{
       const downloaded=offlineManager.isTrackDownloaded(track.id);
-      const blob=downloaded?await offlineManager.audioStorage.get(track.id):audioCache.has(track.id)?await audioCache.get(track.id):null;
+      const blob=downloaded?await offlineManager.audioStorage.get(track.id):null;
       if(!blob||this.state.currentTrack?.id!==track.id||this.loadController!==controller||controller?.signal.aborted||this.state.isPlaying)return;
       if(this.resumeBuffer)URL.revokeObjectURL(this.resumeBuffer.url);
       this.resumeBuffer={id:track.id,duration:track.duration,url:URL.createObjectURL(blob),source:downloaded?'local':'cloud'};
@@ -141,12 +261,13 @@ export class PlayerEngine {
   private refreshNativeSession():void{
     this.configureNativeAudioSession();
     if(!this.state.currentTrack)return;
-    this.setupMediaSession();
+    this.setupMediaSession(true);
     this.updateMediaSessionMetadata(this.state.currentTrack);
     this.updateMediaSessionPosition();
     this.syncMediaSessionPlaybackState(true);
   }
   private sourceOffset = 0;
+  private loadIntent = 0;
   private sourceAssigned = false;
   private validatePreparedLocal = false;
   private nativeSeekOnMetadata = 0;
@@ -156,6 +277,10 @@ export class PlayerEngine {
   private retryCount = 0;
   private currentLoadStartedAt = 0;
   private metadataSequence = 0;
+  private mediaHandlersSession:MediaSession|null=null;
+  private nativeMediaTransport = false;
+  private cancelRemoteResumeDiagnostic: (() => void) | null = null;
+  private publishedMetadata='';
   private mediaRefresh:ReturnType<typeof setTimeout>|null=null;
   private audioListeners = new AbortController();
   private previousBuffered: { id: string; duration: number; url: string; source: 'local' | 'cloud' } | null = null;
@@ -167,17 +292,19 @@ export class PlayerEngine {
     this.configureNativeAudioSession();
     this.audio = new Audio();
     this.audio.preload = 'metadata';
+    const audioSession = (navigator as Navigator & { audioSession?: EventTarget & { state: string } }).audioSession;
+    audioSession?.addEventListener?.('statechange', () => {
+      if (audioSession.state === 'interrupted') this.handleAudioInterruption();
+      else if (this.silentPause) this.syncSilentPauseTransport();
+    });
     this.setupAudioListeners();
     this.setupMediaSession();
+    if (isIOS()) reportMediaControls('command', {action:'nativePlaybackPolicy',play:'browserOwned'});
     this.restorePersistedState();
     subscribeConnection(()=>{if(isServerOnline()||!this.state.currentTrack||this.canPlayOffline(this.state.currentTrack))return;
-      const active=this.wantsPlayback||this.state.isLoading;this.pause();this.loadController?.abort();this.preparingNext?.controller.abort();this.preparingNext=null;if(this.preparedNext)URL.revokeObjectURL(this.preparedNext.url);this.preparedNext=null;
+      const active=this.wantsPlayback||this.state.isLoading;this.pause({hard:true});this.loadController?.abort();this.preparingNext?.controller.abort();this.preparingNext=null;if(this.preparedNext)URL.revokeObjectURL(this.preparedNext.url);this.preparedNext=null;
       this.currentObjectUrl&&URL.revokeObjectURL(this.currentObjectUrl);this.currentObjectUrl=null;this.audio.removeAttribute('src');this.audio.load();this.state.currentTrack=null;this.state.isLoading=false;this.state.error=null;this.sourceAssigned=false;this.notifyState();if(active)this.next();
     });
-    // User interaction warms only the isolated browser, never a song.
-    const warmup = () => { void prepareYoutubeBridge(); };
-    document.addEventListener('pointerdown', warmup, { passive: true });
-    document.addEventListener('keydown', warmup);
     window.addEventListener('pagehide',()=>this.persistPosition(true));
     window.addEventListener('pageshow',()=>this.refreshNativeSession());
     window.addEventListener('sonora:cache-changed',()=>{if(!this.wantsPlayback)this.prepareResumeBuffer();});
@@ -255,14 +382,33 @@ export class PlayerEngine {
     const listen = (event: string, callback: (event: Event) => void) => {
       audio.addEventListener(event, (event) => {
         if (this.audio !== audio || this.loadController !== controller || controller?.signal.aborted) return;
+        if (this.silentPause) {
+          // WebKit can attempt native resumption as an interruption ends.
+          if ((event.type === 'play' || event.type === 'playing') && !audio.paused) audio.pause();
+          return;
+        }
         // The reused iOS element still describes the old song while a source
         // is being prepared. Its queued events must not advance the new clock.
         if (!this.sourceAssigned && event.type !== 'pause') return;
         callback(event);
       }, { signal: this.audioListeners.signal });
     };
-    listen('play', () => {
-      if (!this.wantsPlayback) { audio.pause(); return; }
+    listen('play', (event) => {
+      if (!this.wantsPlayback) {
+        // WebKit may resume the element directly with no JS action callback.
+        // Do not reject that trusted native command as unwanted late autoplay.
+        if (!event.isTrusted || !this.nativeMediaTransport || !this.canUseNativeMediaTransport()
+          || audio.paused || this.state.isLoading || this.pausedAt === null || this.pendingSeek !== null) {
+          audio.pause(); return;
+        }
+        this.wantsPlayback = true;
+        this.state.error = null;
+        this.cancelRemoteResumeDiagnostic?.();
+        this.cancelRemoteResumeDiagnostic = observeRemoteResume(audio,
+          () => this.audio === audio && this.loadController === controller && !controller?.signal.aborted && this.wantsPlayback,
+          this.state.playbackSource);
+        reportMediaControls('command', {action:'nativeTransportPlay',source:this.state.playbackSource,visibility:document.visibilityState});
+      }
       // A play request is not evidence that decoded audio is flowing.
       this.state.isLoading = true;
       this.armLoadingTimeout();
@@ -272,8 +418,14 @@ export class PlayerEngine {
     listen('pause', () => {
       // An iOS source change can deliver the old source's pause event after
       // the reused audio element has already started the replacement.
-      if (!audio.paused || (this.wantsPlayback && this.state.isLoading)) return;
+      if (!audio.paused || (this.wantsPlayback && this.state.isLoading && !this.nativeMediaTransport)) return;
+      // A native Pause can arrive before (or without) a Media Session command.
+      if (this.trySilentPause()) return;
       if (this.previewSession) { void this.stopPreview(false); return; }
+      this.cancelRemoteResumeDiagnostic?.();
+      this.clearLoadingTimeout();
+      this.state.isLoading = false;
+      if (Number.isFinite(audio.currentTime)) this.state.currentTime = this.sourceOffset + audio.currentTime;
       this.state.isPlaying = false;
       this.wantsPlayback=false;
       this.pausedAt=Date.now();
@@ -281,10 +433,11 @@ export class PlayerEngine {
       this.prepareResumeBuffer();
       this.updateMediaSessionPlaybackState('paused');
       this.updateMediaSessionPosition();
+      if (this.nativeMediaTransport) reportMediaControls('command', {action:'nativeTransportPause',source:this.state.playbackSource,visibility:document.visibilityState});
       this.notifyState();
     });
 
-    listen('waiting', () => {
+    listen('waiting', () => {playbackTiming('waiting',audio);
       if (!this.wantsPlayback) return;
       this.clearPreviewTimer();
       this.state.isLoading = true;
@@ -293,17 +446,22 @@ export class PlayerEngine {
     });
 
     listen('playing', () => {
-      if (!this.wantsPlayback) { audio.pause(); return; }
+      if (!this.wantsPlayback) {
+        audio.pause();
+        reportMediaControls('command', { action: 'latePlayingBlocked', pause: audio.paused ? 'nativePaused' : 'nativePlaying' });
+        return;
+      }
+      playbackTiming('playing',audio);
       this.clearLoadingTimeout();
       this.state.isPlaying = true;
       this.pausedAt=null;
-      // Restore commands first, then publish the audible state to Now Playing.
-      this.setupMediaSession();
+      // Source activation can clear native commands; restore them without faking a pause.
+      this.setupMediaSession(!this.nativeMediaTransport);
       // WebKit also activates the native session asynchronously after playing.
       for (const delay of [250, 1000]) setTimeout(() => {
         if (this.audio !== audio || this.loadController !== controller || controller?.signal.aborted
           || !this.wantsPlayback || !this.sourceAssigned || audio.paused || !this.state.isPlaying) return;
-        if (delay === 250) this.setupMediaSession();
+        // Refresh position only; re-registering actions can reset native controls.
         this.updateMediaSessionPosition();
         this.syncMediaSessionPlaybackState(true);
       }, delay);
@@ -324,6 +482,7 @@ export class PlayerEngine {
     });
 
     listen('timeupdate', () => {
+      if(this.wantsPlayback&&!audio.paused&&!audio.ended&&this.sourceOffset+audio.currentTime>this.state.currentTime){this.clearLoadingTimeout();this.state.isLoading=false;this.state.isPlaying=true;}
       this.state.currentTime = this.sourceOffset + this.audio.currentTime;
       if (this.previewSession && this.state.currentTime >= 30) { void this.stopPreview(); return; }
       this.persistPosition();
@@ -342,7 +501,8 @@ export class PlayerEngine {
       }
     });
 
-    listen('loadedmetadata', () => {
+    listen('loadstart',()=>playbackTiming('loadstart',audio));listen('canplay',()=>playbackTiming('canplay',audio));listen('stalled',()=>playbackTiming('stalled',audio));listen('error',()=>playbackTiming('error',audio));
+    listen('loadedmetadata', () => {playbackTiming('loadedmetadata',audio);
       // Validate a prepared download on the active player. Creating a second
       // audio element for metadata can disrupt iOS's background media session.
       if (this.validatePreparedLocal) {
@@ -385,18 +545,23 @@ export class PlayerEngine {
     this.loadingTimer = null;
   }
 
-  private armLoadingTimeout(): void {
+  private armLoadingTimeout(delayMs = 30_000): void {
     if (this.loadingTimer) return;
     const audio = this.audio;
     const controller = this.loadController;
+    const loadingPosition=audio.currentTime;
     this.loadingTimer = setTimeout(() => {
       this.loadingTimer = null;
       if (this.audio !== audio || this.loadController !== controller || !this.wantsPlayback) return;
+      if(!audio.paused&&!audio.ended&&audio.currentTime>loadingPosition){this.state.isLoading=false;this.state.isPlaying=true;this.syncMediaSessionPlaybackState(true);this.notifyState();return;}
+      playbackTiming('startup_timeout', audio);
       this.failPlayback('Audio loading timed out. Check your connection and press Play to retry.');
-    }, 30_000);
+    }, delayMs);
   }
 
   private failPlayback(message: string): void {
+    if(this.silentPause)this.endSilentPause();
+    this.stopSilentContext();
     if (this.previewSession) {
       const id = this.previewSession.id;
       const restoring = this.stopPreview();
@@ -413,6 +578,7 @@ export class PlayerEngine {
     this.state.isLoading = false;
     this.state.isPlaying = false;
     this.state.error = message;
+    this.setupMediaSession();
     this.updateMediaSessionPlaybackState('paused');
     this.notifyState();
   }
@@ -437,17 +603,51 @@ export class PlayerEngine {
     this.notifyState();
   }
 
-  private setupMediaSession(): void {
+  private canUseNativeMediaTransport(): boolean {
+    return isIOS() && this.sourceAssigned
+      && !!this.currentObjectUrl && this.audio.src === this.currentObjectUrl
+      && !this.previewSession
+      && !this.audio.error && !this.audio.ended && !!this.loadController && !this.loadController.signal.aborted;
+  }
+
+  private setupMediaSession(force=false): void {
     if (!('mediaSession' in navigator)) { reportMediaControls('unavailable'); return; }
 
     const ms = navigator.mediaSession;
+    const nativeTransport = this.canUseNativeMediaTransport();
+    if(!force&&this.mediaHandlersSession===ms&&this.nativeMediaTransport===nativeTransport){this.syncMediaSessionPlaybackState(true);return;}
+    this.mediaHandlersSession=ms;
+    this.nativeMediaTransport = nativeTransport;
     const registered: Record<string, string> = {};
 
     const set = (action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
       try {
         ms.setActionHandler(action, handler ? details => {
-          reportMediaControls('command', { action });
+          if (action === 'play' || action === 'pause') this.cancelRemoteResumeDiagnostic?.();
           handler(details);
+          if (action === 'play' && isIOS()) {
+            const audio = this.audio, controller = this.loadController;
+            this.cancelRemoteResumeDiagnostic = observeRemoteResume(audio,
+              () => this.audio === audio && this.loadController === controller && !controller?.signal.aborted && this.wantsPlayback,
+              this.state.playbackSource);
+          }
+          reportMediaControls('command', {
+            action, source: this.state.playbackSource, visibility: document.visibilityState,
+            pause: this.audio.paused ? 'nativePaused' : 'nativePlaying',
+            play: this.wantsPlayback ? 'requestedPlaying' : 'requestedPaused',
+            queued: this.state.isLoading ? 'buffering' : 'ready',
+          });
+          if (action === 'pause') {
+            const audio = this.audio, controller = this.loadController, position = audio.currentTime;
+            setTimeout(() => {
+              if (this.audio !== audio || this.loadController !== controller || this.wantsPlayback) return;
+              reportMediaControls('command', {
+                action: 'pauseSettled', pause: audio.paused ? 'nativePaused' : 'nativePlaying',
+                play: audio.currentTime > position + 0.15 ? 'clockAdvancing' : 'clockStopped',
+                source: this.state.playbackSource, visibility: document.visibilityState,
+              });
+            }, 350);
+          }
         } : null);
         registered[action] = handler ? 'enabled' : 'disabled';
       } catch (error) { registered[action] = error instanceof Error ? error.name : 'failed'; }
@@ -455,7 +655,7 @@ export class PlayerEngine {
     set('play', () => this.play());
     set('pause', () => this.pause());
     set('seekto', (details) => {
-      if (this.state.isLoading) return;
+      if (this.silentPause || this.state.isLoading) return;
       if (details.seekTime !== undefined && details.seekTime !== null) {
         this.seek(details.seekTime);
       }
@@ -475,8 +675,8 @@ export class PlayerEngine {
     if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
     const sequence = ++this.metadataSequence;
     const publish = (artwork: MediaImage[]) => {
-      if (sequence !== this.metadataSequence || this.state.currentTrack?.id !== track.id) return;
-      try { navigator.mediaSession.metadata = new MediaMetadata({ title: track.title, artist: track.artist, album: track.album, artwork }); } catch {}
+      if (this.silentPause || sequence !== this.metadataSequence || this.state.currentTrack?.id !== track.id) return;
+      try { const metadata={title:track.title,artist:track.artist,album:track.album,artwork},key=JSON.stringify(metadata);if(this.publishedMetadata!==key){navigator.mediaSession.metadata=new MediaMetadata(metadata);this.publishedMetadata=key;} } catch {}
       // A decoded cover can arrive after playback or after a user pause.
       this.updateMediaSessionPosition();
       this.syncMediaSessionPlaybackState(true);
@@ -503,8 +703,15 @@ export class PlayerEngine {
   }
 
   private syncMediaSessionPlaybackState(reactivate = false): void {
+    if (this.silentPause) {
+      this.syncSilentPauseTransport();
+      return;
+    }
     if (!this.state.currentTrack) return;
     const playing = this.sourceAssigned && this.wantsPlayback && !this.audio.paused && !this.audio.ended;
+    // Pending streams have not begun native playback; declaring Paused here
+    // can suspend their iOS media session before they deliver their first frame.
+    if(isIOS()&&!playing)return;
     this.updateMediaSessionPlaybackState(playing ? 'playing' : 'paused', reactivate);
   }
 
@@ -512,15 +719,9 @@ export class PlayerEngine {
     if (!('mediaSession' in navigator)) return;
     try {
       const session = navigator.mediaSession;
+      if(isIOS()&&state==='paused'&&(this.wantsPlayback||this.state.isLoading))return;
       if(this.mediaRefresh){clearTimeout(this.mediaRefresh);this.mediaRefresh=null;}
-      // Keep the native session owned during refresh. Yield a task so WebKit
-      // does not coalesce the refresh into an ignored same-value assignment.
-      if(reactivate&&isIOS()&&state==='playing'&&session.playbackState==='playing'){
-        const audio=this.audio,controller=this.loadController,trackId=this.state.currentTrack?.id;
-        session.playbackState='paused';
-        this.mediaRefresh=setTimeout(()=>{this.mediaRefresh=null;if(this.audio!==audio||this.loadController!==controller||controller?.signal.aborted||this.state.currentTrack?.id!==trackId||!this.sourceAssigned||!this.wantsPlayback||audio.paused||audio.ended)return;try{session.playbackState='playing';this.updateMediaSessionPosition();}catch{}},0);
-        return;
-      }
+      if(session.playbackState===state&&!reactivate)return;
       session.playbackState = state;
     } catch {
       // Optional lock-screen integration must never interrupt playback.
@@ -528,6 +729,7 @@ export class PlayerEngine {
   }
 
   private updateMediaSessionPosition(): void {
+    if(this.silentPause)return;
     if (!('mediaSession' in navigator) || !this.state.duration) return;
     try {
       if ('setPositionState' in navigator.mediaSession) {
@@ -544,7 +746,7 @@ export class PlayerEngine {
 
   public subscribe(listener: StateListener): () => void {
     this.stateListeners.add(listener);
-    listener(this.state);
+    listener(this.getState());
     return () => this.stateListeners.delete(listener);
   }
 
@@ -555,20 +757,35 @@ export class PlayerEngine {
   }
 
   private notifyState(): void {
-    for (const listener of this.stateListeners) {
-      listener({ ...this.state });
-    }
+    const snapshot = this.getState();
+    for (const listener of this.stateListeners) listener(snapshot);
   }
 
   private queuePersistence: Promise<void> = Promise.resolve();
+  private savedQueue: QueueItem[] | undefined;
+  private savedManualBase: QueueItem[] | null | undefined;
+
   private persistQueue(): void {
-    const writes = [dbService.setSetting('player_queue_base', this.manualBase), dbService.setSetting('player_playlist', this.state.playlistId ?? null),dbService.setSetting('player_playlist_profile',this.state.playlistProfileId??null), dbService.setSetting('player_queue', this.queue),
-      dbService.setSetting('player_queue_cursor', this.queue[this.currentQueueIndex]?.queueId ?? null)];
-    const savedTrack = this.previewSession ? this.previewSession.track : this.state.currentTrack;
-    if (savedTrack) writes.push(dbService.setSetting('player_track', savedTrack));
-    this.queuePersistence = Promise.all(writes).then(() => {}).catch(error => {
-      console.warn('Could not save playback queue:', error);
-    });
+    const queue = this.queue;
+    const base = this.manualBase;
+    const cursor = queue[this.currentQueueIndex]?.queueId ?? null;
+    const playlist = this.state.playlistId ?? null;
+    const profile = this.state.playlistProfileId ?? null;
+    const track = this.previewSession ? this.previewSession.track : this.state.currentTrack;
+    this.queuePersistence = this.queuePersistence.then(async () => {
+      const db = await getDB();
+      const tx = db.transaction('settings', 'readwrite');
+      const settings = tx.objectStore('settings');
+      const updatedAt = Date.now();
+      const write = (key: string, value: unknown) => settings.put({ key, value, updatedAt });
+      const writes = [write('player_playlist', playlist), write('player_playlist_profile', profile), write('player_queue_cursor', cursor)];
+      if (queue !== this.savedQueue) writes.push(write('player_queue', queue));
+      if (base !== this.savedManualBase) writes.push(write('player_queue_base', base));
+      if (track) writes.push(write('player_track', track));
+      await Promise.all([...writes, tx.done]);
+      this.savedQueue = queue;
+      this.savedManualBase = base;
+    }).catch(error => console.warn('Could not save playback queue:', error));
   }
 
   private notifyQueue(): void {
@@ -584,7 +801,7 @@ export class PlayerEngine {
    * Memory only: never marked downloaded or saved to the user's offline library. */
   private prepareNextStream(requestedTrack?: Track): void {
     if (this.previewSession) return;
-    if (!isIOS() || (!requestedTrack && !this.state.isPlaying)) return;
+    if (!requestedTrack && !this.state.isPlaying) return;
     const index = this.currentQueueIndex + 1;
     const next = requestedTrack || this.queue[index]?.track
       || (this.state.repeatMode === 'all' ? this.queue.find(item => !item.manual)?.track : undefined);
@@ -598,12 +815,13 @@ export class PlayerEngine {
     if (next&&!this.canPlayOffline(next))return;
     if (!next || (this.previousBuffered && matches(this.previousBuffered)) || this.preparedNext || this.preparingNext) return;
     const isDownloaded = offlineManager.isTrackDownloaded(next.id);
-    if (!isDownloaded && !audioCache.has(next.id) && (!navigator.onLine || !isYoutubeTrack(next))) return;
+    if (!isDownloaded) { audioCache.enqueue([next], 0); return; }
+    if (!isIOS()) return;
     const job = { id: next.id, duration: next.duration, controller: new AbortController(), promise: Promise.resolve() };
     this.preparingNext = job;
     const timeout = setTimeout(() => job.controller.abort(), 30_000);
     job.promise = (async () => {
-      const blob = isDownloaded ? await offlineManager.audioStorage.get(next.id) : await audioCache.ensure(next, job.controller.signal);
+      const blob = await offlineManager.audioStorage.get(next.id);
       job.controller.signal.throwIfAborted();
       if (!blob) throw new Error('Downloaded audio is missing');
       // Check the duration on the real player when this source starts. A
@@ -629,8 +847,16 @@ export class PlayerEngine {
   }
 
   private async loadTrack(track: Track, newQueue?: Track[], offset = 0, recovery = false): Promise<void> {
-    if(!this.canPlayOffline(track))return;
+    if (!hasAccountAccess()) { this.pause({hard:true}); return; }
+    if (!this.canPlayOffline(track)) return;
     this.configureNativeAudioSession();
+    // Prime in the Play gesture, before account or audio storage awaits.
+    this.primeSilentContext();
+    const intent = ++this.loadIntent;
+    const allowed = await authorizeSharedPlayback();
+    if (intent !== this.loadIntent) return;
+    if (!allowed) { this.pause({hard:true}); return; }
+    if (this.silentPause) this.endSilentPause();
     const resumeSource=this.resumeBuffer?.id===track.id&&this.resumeBuffer.duration===track.duration?this.resumeBuffer:null;
     if(resumeSource)this.resumeBuffer=null;
     else if(this.resumeBuffer){URL.revokeObjectURL(this.resumeBuffer.url);this.resumeBuffer=null;}
@@ -646,6 +872,8 @@ export class PlayerEngine {
     this.loadController = controller;
     this.sourceAssigned = false;
     this.validatePreparedLocal = false;
+    this.setupMediaSession();
+    this.completionRecorded = false;
     // iOS grants background playback to the audio element the user started.
     // Replacing that element per song loses its playback permission/session.
     // Desktop browsers retain isolated elements for protection from stale events.
@@ -676,7 +904,7 @@ export class PlayerEngine {
         if (index >= 0) this.currentQueueIndex = index;
         else {
           // Playing a standalone discovery result must not leave the cursor on an unrelated song.
-          this.queue.splice(this.currentQueueIndex + 1, 0, {track, queueId: crypto.randomUUID()});
+          this.queue = [...this.queue.slice(0, this.currentQueueIndex + 1), {track, queueId: crypto.randomUUID()}, ...this.queue.slice(this.currentQueueIndex + 1)];
           this.currentQueueIndex++;
         }
       }
@@ -695,14 +923,9 @@ export class PlayerEngine {
     this.state.bufferedTime = 0;
     this.state.error = null;
     if (!recovery) this.retryCount = 0;
-    this.currentLoadStartedAt = perfNow();
+    this.currentLoadStartedAt = perfNow();beginPlaybackTiming();
     this.armLoadingTimeout();
     this.notifyState();
-
-    // Persist current track
-    if (!recovery && !this.previewSession) {
-      void dbService.addHistory(track.id, track).catch(() => {});
-    }
 
     // Keep the native title attached to the audible source during buffering.
     if (!isIOS()) this.updateMediaSessionMetadata(track);
@@ -788,17 +1011,6 @@ export class PlayerEngine {
         }
       }
 
-      const cached = audioCache.has(track.id) ? await audioCache.get(track.id) : null;
-      controller.signal.throwIfAborted();
-      if (cached) {
-        this.currentObjectUrl = URL.createObjectURL(cached);
-        this.state.playbackSource = 'cloud'; this.sourceOffset = 0; this.nativeSeekOnMetadata = offset;
-        this.sourceAssigned = true; this.audio.src = this.currentObjectUrl;
-        if (isIOS()) this.updateMediaSessionMetadata(track);
-        if (!this.wantsPlayback) return;
-        await this.audio.play(); return;
-      }
-
       // If offline and track not downloaded, reject
       if (!isServerOnline()) {
         throw new Error('This track is not downloaded for offline playback.');
@@ -806,9 +1018,8 @@ export class PlayerEngine {
 
       this.state.playbackSource = 'cloud';
       if (isYoutubeTrack(track)) {
-        void prepareYoutubeBridge();
-        controller.signal.throwIfAborted();
         this.sourceAssigned = true;
+        playbackTiming('assign_src', this.audio);
         this.audio.src = youtubeStreamUrl(track, offset);
         if (isIOS()) this.updateMediaSessionMetadata(track);
         logPerf('youtube stream src assigned', this.currentLoadStartedAt, { trackId: track.id });
@@ -855,18 +1066,42 @@ export class PlayerEngine {
       : 'This audio file could not be played. Press Play to retry or choose another track.');
   }
 
+  public getSharedQueueContext(){return {manualBase:this.manualBase,playlistProfileId:this.state.playlistProfileId};}
+  public async receiveSharedPlayback(value:{track:Track;queue:Track[];position:number;playing:boolean;playlistId?:string|null;shuffle?:boolean;repeatMode?:RepeatMode;items?:QueueItem[];queueIndex?:number;manualBase?:QueueItem[]|null;playlistProfileId?:string|null}):Promise<void>{
+    if(!hasAccountAccess())return;
+    this.pause({hard:true});this.state.playlistId=value.playlistId||null;this.state.playlistProfileId=value.playlistProfileId||null;
+    this.state.shuffle=value.shuffle??false;this.state.repeatMode=value.repeatMode||'off';
+    if(value.playing){await this.loadTrack(value.track,value.queue,value.position);if(value.items?.length){this.manualBase=value.manualBase||null;this.queue=value.items;this.currentQueueIndex=Math.max(0,Math.min(value.queueIndex||0,this.queue.length-1));this.notifyQueue();this.persistQueue();}return;}
+    this.loadController?.abort();this.sourceAssigned=false;this.state.currentTrack=value.track;this.state.currentTime=value.position;this.state.duration=value.track.duration;this.pendingSeek=value.position;this.setQueue(value.queue,value.track);if(value.items?.length){this.manualBase=value.manualBase||null;this.queue=value.items;this.currentQueueIndex=value.queueIndex||0;this.notifyQueue();this.persistQueue();}this.updateMediaSessionMetadata(value.track);this.notifyState();
+  }
   public async play(): Promise<void> {
+    if(!hasAccountAccess()){this.pause({hard:true});return;}
+    if ((navigator as any).audioSession?.state === 'interrupted') return;
+    if (this.audio.ended) this.completionRecorded = false;
     if(this.state.currentTrack&&!this.canPlayOffline(this.state.currentTrack)){this.next();return;}
+    if (this.silentPause) {
+      const context = this.silentContext;
+      this.endSilentPause();
+      // Explicit Play can re-arm a context iOS left suspended. The song's
+      // native Play proceeds independently of Web Audio.
+      if (context && context.state !== 'running') void context.resume().catch(() => {});
+    }
+    if(this.sourceAssigned&&!this.audio.paused&&!this.audio.ended&&!this.audio.error&&(this.state.isPlaying||this.audio.readyState>=3)){this.wantsPlayback=true;this.state.isPlaying=true;this.state.isLoading=false;this.state.error=null;this.clearLoadingTimeout();this.syncMediaSessionPlaybackState(true);this.notifyState();return;}
     this.configureNativeAudioSession();
+    if (this.state.currentTrack || this.queue.length) this.primeSilentContext();
     this.setupMediaSession();
     this.state.error = null;
     this.wantsPlayback = true;
     // A second lock-screen Play while buffering must not resume the old source.
     if (this.state.isLoading && !this.sourceAssigned && !this.loadController?.signal.aborted) return;
     if (this.state.currentTrack) {
-      // A paused live capture may have expired while iOS suspended the page.
-      // Prefer a complete cached source; otherwise reconnect at the saved time.
-      if(isIOS()&&this.isLiveCapture()&&this.pausedAt!==null&&Date.now()-this.pausedAt>=30_000){
+      // Elapsed pause time alone does not mean the attached source expired.
+      // Resume it in the remote-command turn: a reload can await suspended IDB
+      // work before reaching native play. Recover only a missing/failed source,
+      // or use a complete resume buffer that is already available synchronously.
+      if(isIOS()&&this.isLiveCapture()&&this.pausedAt!==null&&Date.now()-this.pausedAt>=30_000
+        && (!this.sourceAssigned || !this.audio.src || this.audio.error || this.loadController?.signal.aborted
+          || (this.resumeBuffer?.id===this.state.currentTrack.id&&this.resumeBuffer.duration===this.state.currentTrack.duration))){
         const position=this.pendingSeek??this.state.currentTime;
         await this.loadTrack(this.state.currentTrack,undefined,position,true);return;
       }
@@ -879,13 +1114,11 @@ export class PlayerEngine {
       } else {
         const audio = this.audio;
         const controller = this.loadController;
-        if (this.isLiveCapture()) {
-          fetch('/api/ytmusic/bridge/resume', { method: 'POST', headers: bridgeHeaders() }).catch(() => {});
-        }
         try {
           this.state.isLoading = true;
           this.armLoadingTimeout();
           this.notifyState();
+          if(!this.wantsPlayback)return;
           await audio.play();
         } catch (err: any) {
           if (this.audio !== audio || controller?.signal.aborted || (!this.wantsPlayback && err.name === 'AbortError')) return;
@@ -897,7 +1130,17 @@ export class PlayerEngine {
     }
   }
 
-  public pause(): void {
+  public pause(options?:{hard?:boolean}): void {
+    this.loadIntent++;
+    if (this.silentPause) {
+      if (!options?.hard) {
+        if (!this.audio.paused) this.audio.pause();
+        return;
+      }
+      this.endSilentPause();
+    }
+    if (!options?.hard && this.trySilentPause()) return;
+    this.stopSilentContext();
     if (this.previewSession) { void this.stopPreview(false); return; }
     this.clearLoadingTimeout();
     const wasLoading = this.state.isLoading;
@@ -910,17 +1153,12 @@ export class PlayerEngine {
     // when the previous source was a buffered blob rather than a live capture.
     // Play then loads the selected song, instead of resuming the old source.
     if (!this.sourceAssigned) this.loadController?.abort();
-    // If pausing a YouTube track, pause the hidden Chromium bridge too
-    // so it doesn't keep playing (and buffering) in the background.
-    if (this.isLiveCapture()) {
-      fetch('/api/ytmusic/bridge/pause', { method: 'POST', headers: bridgeHeaders() }).catch(() => {});
-      if (wasLoading) {
-        // Abort the HTTP capture too: a late backend start must not leak audio.
-        this.pendingSeek = this.state.currentTime;
-        this.loadController?.abort();
-        this.audio.removeAttribute('src');
-        this.audio.load();
-      }
+    if (this.isLiveCapture() && wasLoading) {
+      // Cancel an in-flight audio request before it can finish starting.
+      this.pendingSeek = this.state.currentTime;
+      this.loadController?.abort();
+      this.audio.removeAttribute('src');
+      this.audio.load();
     }
     this.audio.pause();
     this.state.isPlaying = false;
@@ -1028,10 +1266,55 @@ export class PlayerEngine {
     await this.queuePersistence;
   }
 
+  public setPlaylistOrder(playlistId: string, tracks: Track[]): void {
+    if (this.state.playlistId !== playlistId || this.state.playlistProfileId) return;
+    const rank = new Map(tracks.map((track, index) => [track.id, index]));
+    const current = this.queue[this.currentQueueIndex];
+    if (!current) return;
+    const update = (item: QueueItem) => {
+      const position = rank.get(item.track.id);
+      const source = item.queueSource?.playlistId === playlistId ? { ...item.queueSource, tracks } : item.queueSource;
+      if (item.originPlaylistId && item.originPlaylistId !== playlistId) return item;
+      return { ...item, contextIndex: position, queueSource: source };
+    };
+    this.queue = this.queue.map(update);
+    if (this.manualBase) this.manualBase = this.manualBase.map(update)
+      .sort((a, b) => (a.contextIndex ?? Infinity) - (b.contextIndex ?? Infinity));
+    if (!this.state.shuffle) this.restorePlaylistOrder();
+    this.notifyQueue();
+  }
+
+  private restorePlaylistOrder(): boolean {
+    const current = this.queue[this.currentQueueIndex];
+    if (!this.state.playlistId || !current || current.contextIndex === undefined) return false;
+    const upcoming = this.queue.slice(this.currentQueueIndex + 1);
+    const manual = upcoming.filter(item => item.manual);
+    const requested = new Set(manual.map(item => item.track.id));
+    const otherSource = manual.at(-1)?.queueSource;
+    const retarget = !!this.manualBase && !!otherSource && otherSource.playlistId !== this.state.playlistId;
+    const candidates = retarget ? [...this.queue.slice(0, this.currentQueueIndex + 1), ...this.manualBase!] : this.queue;
+    const ranked = candidates.filter(item => item.queueId !== current.queueId && !requested.has(item.track.id)
+      && item.contextIndex !== undefined && (!item.originPlaylistId || item.originPlaylistId === this.state.playlistId))
+      .sort((a, b) => a.contextIndex! - b.contextIndex!);
+    const before = ranked.filter(item => item.contextIndex! < current.contextIndex!);
+    const after = ranked.filter(item => item.contextIndex! > current.contextIndex!);
+    const extras = upcoming.filter(item => !item.manual && item.contextIndex === undefined);
+    if (retarget) {
+      this.manualBase = after;
+      this.queue = [...before, current, ...upcoming];
+    } else {
+      this.manualBase = null;
+      this.queue = [...before, current, ...manual, ...after, ...extras];
+    }
+    this.currentQueueIndex = before.length;
+    return true;
+  }
+
   public toggleShuffle(): void {
     this.state.shuffle = !this.state.shuffle;
     void dbService.setSetting('player_shuffle', this.state.shuffle);
     if(this.state.playlistId)this.savePlaylistMode(this.state.playlistId,this.state.shuffle);
+    if (!this.state.shuffle && this.restorePlaylistOrder()) { this.notifyQueue(); this.notifyState(); return; }
     const history = this.queue.slice(0, this.currentQueueIndex + 1);
     const upcoming = this.queue.slice(this.currentQueueIndex + 1);
     const manual = upcoming.filter(item => item.manual);
@@ -1091,10 +1374,22 @@ export class PlayerEngine {
 
   private handleTrackEnded(): void {
     if (this.previewSession) { void this.stopPreview(); return; }
+    // Starting, skipping, pausing and previews never count as completed plays.
+    // A broken stream can also emit ended: require the clock to reach the song's
+    // real end before writing the shared history used by daily/weekly recap.
+    const track = this.state.currentTrack;
+    if (track && (this.wantsPlayback || this.audio.ended) && !this.state.error && !this.completionRecorded) {
+      try {
+        assertAudioDuration(this.sourceOffset + this.audio.currentTime, track.duration || this.state.duration);
+        this.completionRecorded = true;
+        void dbService.addHistory(track.id, track).catch(() => {});
+      } catch { /* An early EOF is not a completed listen. */ }
+    }
     reportMediaControls('ended', { queued: this.currentQueueIndex + 1 < this.queue.length ? 'yes' : 'no' });
     if (this.state.repeatMode === 'one' && !this.queue[this.currentQueueIndex]?.manual && !this.queue[this.currentQueueIndex + 1]?.manual) {
-      this.seek(0);
-      this.play();
+      this.completionRecorded = false;
+      if (track && this.isLiveCapture()) void this.loadTrack(track, undefined, 0, true);
+      else { this.seek(0); void this.play(); }
       return;
     }
     if (this.currentQueueIndex + 1 >= this.queue.length) this.extendWithRecommendations();
@@ -1104,10 +1399,12 @@ export class PlayerEngine {
       this.next();
       return;
     }
+    this.stopSilentContext();
     this.clearLoadingTimeout();
     this.state.isPlaying = false;
     this.state.isLoading = false;
     this.wantsPlayback = false;
+    this.setupMediaSession();
     this.updateMediaSessionPlaybackState('paused');
     this.notifyState();
   }
@@ -1139,7 +1436,7 @@ export class PlayerEngine {
   private manualBase:QueueItem[]|null=null;
   private retargetManuals(upcoming:QueueItem[]):QueueItem[]{
     const manual=upcoming.filter(item=>item.manual),last=manual.at(-1),ids=new Set(manual.map(item=>item.track.id));
-    if(!last?.queueSource){if(!this.manualBase)return upcoming;const base=this.manualBase;this.manualBase=null;return [...manual,...base.filter(item=>!ids.has(item.track.id))];}
+    if(!last?.queueSource || last.queueSource.playlistId===this.state.playlistId){if(!this.manualBase)return upcoming;const base=this.manualBase;this.manualBase=null;return [...manual,...base.filter(item=>!ids.has(item.track.id))];}
     this.manualBase??=upcoming.filter(item=>!item.manual);
     const source=last.queueSource,index=source.tracks.findIndex(t=>t.id===last.track.id);
     const tracks=source.shuffle?source.tracks.filter(t=>t.id!==last.track.id):source.tracks.slice(index+1);
@@ -1185,6 +1482,15 @@ export class PlayerEngine {
 
   public getQueue(): QueueItem[] {
     return [...this.queue];
+  }
+
+  public canRestartForUpdate(): boolean {
+    return !this.state.isPlaying && !this.state.isLoading && !this.previewSession
+      && !this.silentPause;
+  }
+
+  public savePositionForUpdate(): void {
+    this.persistPosition(true);
   }
 
   public getState(): PlayerState {

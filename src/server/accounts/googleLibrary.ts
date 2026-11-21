@@ -4,21 +4,57 @@ import {snapshotWeeks} from '../../lib/recap.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import {randomBytes,createHash} from 'node:crypto';
-import {OAuth2Client} from 'google-auth-library';
-const router=express.Router();router.use(express.json({limit:'20mb'}));
+const router=express.Router();router.use((_req,res,next)=>{res.setHeader('Cache-Control','private, no-store');next();});router.use(express.json({limit:'20mb'}));
 const file=()=>process.env.SONORA_ACCOUNT_FILE||path.join(process.cwd(),'.sonora','google-library.json');
 const hash=(s:string)=>createHash('sha256').update(s).digest('hex');
 const cookies=(req:express.Request)=>Object.fromEntries((req.headers.cookie||'').split(';').map(s=>{const i=s.indexOf('=');return [s.slice(0,i).trim(),s.slice(i+1)];}));
 const clientId=()=>process.env.GOOGLE_CLIENT_ID||'';
 const secure=(req:express.Request)=>req.secure||req.headers['x-forwarded-proto']==='https';
-const options=(req:express.Request)=>({httpOnly:true,secure:secure(req),sameSite:'lax' as const,path:'/api/account'});
-function read(){try{return JSON.parse(fs.readFileSync(file(),'utf8'));}catch(e:any){if(e.code==='ENOENT')return {accounts:{},sessions:{}};throw e;}}
-function write(value:any){fs.mkdirSync(path.dirname(file()),{recursive:true});fs.writeFileSync(file()+'.tmp',JSON.stringify(value));fs.renameSync(file()+'.tmp',file());}
+const options=(req:express.Request)=>({httpOnly:true,secure:secure(req),sameSite:'lax' as const,path:'/'});
+function read(filename=file()){try{return JSON.parse(fs.readFileSync(filename,'utf8'));}catch(e:any){if(e.code==='ENOENT')return {accounts:{},sessions:{}};throw e;}}
+type Session = { uid: string; expires: number };
+type AccountIdentity = { name: string; sharedPlayback: boolean };
+let identityCache: { version: string; accounts: Map<string, AccountIdentity>; sessions: Record<string, Session> } | undefined;
+
+// Playback checks and progress polls only need identity and session metadata.
+// Keep library contents out of this cache and notice atomic file replacements.
+function identities(filename: string) {
+  const stat = fs.statSync(filename, { throwIfNoEntry: false });
+  const version = JSON.stringify([filename, stat?.ino, stat?.size, stat?.mtimeMs, stat?.ctimeMs]);
+  if (identityCache?.version === version) return identityCache;
+  const data = read(filename);
+  const accounts = new Map<string, AccountIdentity>();
+  for (const [uid, account] of Object.entries(data.accounts) as [string, any][]) {
+    accounts.set(uid, {
+      name: String(account.social?.name || account.profile?.displayName || 'Signed-in user').slice(0, 100),
+      sharedPlayback: account.experimentalSharedPlayback === true,
+    });
+  }
+  return identityCache = { version, accounts, sessions: data.sessions };
+}
+
+function write(value:any){fs.mkdirSync(path.dirname(file()),{recursive:true});fs.writeFileSync(file()+'.tmp',JSON.stringify(value));fs.renameSync(file()+'.tmp',file());identityCache=undefined;}
 function session(req:express.Request,data:any){const token=cookies(req).sonora_session;if(!token)return;const saved=data.sessions[hash(token)];if(saved?.expires>Date.now())return saved;}
 function sameOrigin(req:express.Request){return new Set([process.env.SONORA_PUBLIC_ORIGIN||'https://enzo-pc.tail1214fa.ts.net:8443','http://localhost:4173','http://127.0.0.1:4175','http://localhost:3000']).has(String(req.headers.origin||''));}
-router.get('/session',(req,res)=>{try{const data=read(),current=session(req,data);let nonce=cookies(req).sonora_nonce;if(!nonce){nonce=randomBytes(24).toString('hex');res.cookie('sonora_nonce',nonce,{...options(req),maxAge:600000});}res.json({clientId:clientId(),nonce,profile:current?data.accounts[current.uid]?.profile:null});}catch{res.status(500).json({error:'Account storage could not be read'});}});
-router.post('/google',async(req,res)=>{if(!sameOrigin(req))return res.sendStatus(403);if(!clientId())return res.status(503).json({error:'Google sign-in is not configured on this server'});try{const credential=req.body?.credential;if(typeof credential!=='string'||credential.length>10000)return res.sendStatus(400);const ticket=await new OAuth2Client(clientId()).verifyIdToken({idToken:credential,audience:clientId()});const payload=ticket.getPayload();if(!payload?.sub||!payload.email_verified||!cookies(req).sonora_nonce||(payload as any).nonce!==cookies(req).sonora_nonce)return res.sendStatus(401);const data=read(),uid=payload.sub;const account=data.accounts[uid]||{collections:{},revision:0,batches:[]};account.profile={uid,email:payload.email,displayName:payload.name,photoURL:payload.picture};data.accounts[uid]=account;const token=randomBytes(32).toString('hex');data.sessions[hash(token)]={uid,expires:Date.now()+30*86400000};for(const [key,value]of Object.entries(data.sessions))if((value as any).expires<Date.now())delete data.sessions[key];write(data);res.clearCookie('sonora_nonce',options(req));res.cookie('sonora_session',token,{...options(req),maxAge:30*86400000});res.json({profile:account.profile});}catch{res.status(401).json({error:'Google sign-in could not be verified. Please try again.'});}});
-router.post('/logout',(req,res)=>{if(!sameOrigin(req))return res.sendStatus(403);try{const data=read(),token=cookies(req).sonora_session;if(token)delete data.sessions[hash(token)];write(data);res.clearCookie('sonora_session',options(req));res.sendStatus(204);}catch{res.sendStatus(500);}});
+export function sharedPlaybackEnabled(uid:string){return identities(file()).accounts.get(uid)?.sharedPlayback===true;}
+export function setSharedPlayback(uid:string,enabled:boolean){const d=read();if(!d.accounts[uid])throw Error('Account missing');d.accounts[uid].experimentalSharedPlayback=enabled;write(d);}
+export function authenticatedAccount(req: express.Request, filename = file()): (Session & AccountIdentity) | undefined {
+  const token = cookies(req).sonora_session;
+  if (!token) return;
+  try {
+    const data = identities(filename);
+    const saved = data.sessions[hash(token)];
+    const account = saved && data.accounts.get(saved.uid);
+    if (account && saved.expires > Date.now()) return { ...saved, ...account };
+  } catch {}
+}
+export function requireAccount(req:express.Request,res:express.Response,next:express.NextFunction){
+ if(!req.path.startsWith('/api/')||req.path==='/api/health'||['/api/account/session','/api/account/google','/api/account/logout'].includes(req.path))return next();
+ const account=authenticatedAccount(req);if(!account)return res.status(401).json({error:'sign_in_required',message:'Sign in with Google to use Sonora.'});res.locals.account=account;next();
+}
+router.get('/session',(req,res)=>{try{const data=read(),current=session(req,data);if(current){res.clearCookie('sonora_session',{...options(req),path:'/api/account'});res.cookie('sonora_session',cookies(req).sonora_session,{...options(req),maxAge:current.expires-Date.now()});}let nonce=cookies(req).sonora_nonce;if(!nonce){nonce=randomBytes(24).toString('hex');res.cookie('sonora_nonce',nonce,{...options(req),maxAge:600000});}res.json({clientId:clientId(),nonce,expiresAt:current?.expires||0,profile:current?data.accounts[current.uid]?.profile:null});}catch{res.status(500).json({error:'Account storage could not be read'});}});
+router.post('/google',async(req,res)=>{if(!sameOrigin(req))return res.sendStatus(403);if(!clientId())return res.status(503).json({error:'Google sign-in is not configured on this server'});try{const credential=req.body?.credential;if(typeof credential!=='string'||credential.length>10000)return res.sendStatus(400);const {OAuth2Client}=await import('google-auth-library');const ticket=await new OAuth2Client(clientId()).verifyIdToken({idToken:credential,audience:clientId()});const payload=ticket.getPayload();if(!payload?.sub||!payload.email_verified||!cookies(req).sonora_nonce||(payload as any).nonce!==cookies(req).sonora_nonce)return res.sendStatus(401);const data=read(),uid=payload.sub;const account=data.accounts[uid]||{collections:{},revision:0,batches:[]};account.profile={uid,email:payload.email,displayName:payload.name,photoURL:payload.picture};data.accounts[uid]=account;const token=randomBytes(32).toString('hex');data.sessions[hash(token)]={uid,expires:Date.now()+30*86400000};for(const [key,value]of Object.entries(data.sessions))if((value as any).expires<Date.now())delete data.sessions[key];write(data);res.clearCookie('sonora_nonce',options(req));res.cookie('sonora_session',token,{...options(req),maxAge:30*86400000});res.json({profile:account.profile,expiresAt:data.sessions[hash(token)].expires});}catch{res.status(401).json({error:'Google sign-in could not be verified. Please try again.'});}});
+router.post('/logout',(req,res)=>{if(!sameOrigin(req))return res.sendStatus(403);try{const data=read(),token=cookies(req).sonora_session;if(token)delete data.sessions[hash(token)];write(data);res.clearCookie('sonora_session',options(req));res.clearCookie('sonora_session',{...options(req),path:'/api/account'});res.sendStatus(204);}catch{res.sendStatus(500);}});
 const allowed=new Set(['tracks','playlists','favorites','history','albums','artists','preferences']);
 router.post('/library',(req,res)=>{if(!sameOrigin(req))return res.sendStatus(403);try{const data=read(),current=session(req,data);if(!current||req.body?.accountUid!==current.uid)return res.sendStatus(401);const {batch,changes}=req.body||{};if(typeof batch!=='string'||batch.length>100||!Array.isArray(changes)||changes.length>50000)return res.sendStatus(400);for(const op of changes)if(!allowed.has(op.collection)||typeof op.id!=='string'||op.id.length>512||['__proto__','constructor','prototype'].includes(op.id)||(op.value!==null&&(typeof op.value!=='object'||Array.isArray(op.value))))return res.sendStatus(400);const account=data.accounts[current.uid];if(!changes.length&&req.body.revision===account.revision)return res.json({unchanged:true,revision:account.revision});if(!account.batches.includes(batch)){for(const op of changes){const collection=account.collections[op.collection]??={};if(op.value===null){delete collection[op.id];continue;}let value=op.value;const remote=collection[op.id];if(op.collection==='playlists'&&op.base&&!remote)continue;if(op.collection==='playlists'&&remote&&op.base){value={...remote};for(const key of Object.keys(op.value))if(JSON.stringify(op.value[key])!==JSON.stringify(op.base[key]))value[key]=op.value[key];if(Array.isArray(op.value.trackIds)&&Array.isArray(op.base.trackIds)){const removed=new Set(op.base.trackIds.filter((id:string)=>!op.value.trackIds.includes(id)));value.trackIds=[...new Set([...(remote.trackIds||[]),...op.value.trackIds])].filter(id=>!removed.has(id));}}collection[op.id]=value;}account.revision++;account.batches.push(batch);account.batches=account.batches.slice(-1000);write(data);}res.json({collections:account.collections,revision:account.revision});}catch{res.status(500).json({error:'Your library could not be synced. Changes stay saved on this device.'});}});
 

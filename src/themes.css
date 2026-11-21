@@ -63,7 +63,7 @@
 /* NOTEBOOK — a warm, ruled journal with ink, paper tabs and taped sleeves. */
 :root[data-style='notebook'] { --theme-ink:var(--text-primary); --paper:color-mix(in srgb,var(--bg) 96%,#fff); --paper-line:color-mix(in srgb,var(--accent) 17%,transparent); }
 :root[data-style='notebook'] body { font-family:'Sonora Hand','Segoe Print',cursive; }
-:root[data-style='notebook'] .page-pane { background-image:linear-gradient(90deg,transparent 0 13px,#c1716933 13px 14px,transparent 14px),repeating-linear-gradient(0deg,transparent 0 31px,var(--paper-line) 31px 32px); background-attachment:local; }
+:root[data-style='notebook'] .page-canvas::before { content:'';position:absolute;inset:0;z-index:-1;pointer-events:none;background-image:linear-gradient(90deg,transparent 0 13px,#c1716933 13px 14px,transparent 14px),repeating-linear-gradient(0deg,transparent 0 31px,var(--paper-line) 31px 32px); }
 :root[data-style='notebook'] :is(h1,h2,h3,.brand,.hero-copy h2,.theme-design-caption strong) { font-family:'Sonora Hand','Segoe Print',cursive; letter-spacing:-.025em; font-weight:600; }
 :root[data-style='notebook'] .eyebrow { font-family:'Sonora Hand',cursive; font-size:12px; letter-spacing:.06em; color:var(--accent-readable); }
 :root[data-style='notebook'] .page-heading h1 { font-size:40px; }
@@ -127,7 +127,8 @@
 :root[data-style='retro'] :is(.primary-button,.action-button) { box-shadow:3px 3px 0 var(--retro-shadow); font-family:inherit; font-size:15px; }
 :root[data-style='retro'] .action-button { background:var(--surface-active); }
 :root[data-style='retro'] :is(.primary-button,.action-button):active { transform:translate(2px,2px); box-shadow:1px 1px 0 var(--retro-shadow); }
-:root[data-style='retro'] .segmented-tabs { padding:3px;gap:3px; }.library-tab-indicator{pointer-events:none;}
+:root[data-style='retro'] .segmented-tabs { padding:3px;gap:3px; }
+:root[data-style='retro'] .library-tabs { --library-tab-gap:3px; }
 :root[data-style='retro'] .segmented-tabs>button { border:0; font-size:14px; }.segmented-tabs>button{min-width:0;}
 :root[data-style='retro'] .library-tab-indicator { border-radius:0; background:var(--selected); border-bottom:2px solid var(--accent); }
 :root[data-style='retro'] .song-list { background:transparent; border:0; border-radius:0; display:grid; gap:6px; }
@@ -247,7 +248,7 @@
 @media(max-width:600px){.theme-design-classic{grid-column:auto;}.theme-design-classic .theme-design-scene{height:150px;}}
 :root[data-style='gotham'] { --gotham-line:color-mix(in srgb,var(--accent) 28%,var(--bg));--gotham-deep:color-mix(in srgb,var(--bg) 75%,#000);--gotham-paper:color-mix(in srgb,var(--accent) 24%,var(--text-primary)); }
 :root[data-style='gotham'] body { font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
-:root[data-style='gotham'] .page-pane { background-color:var(--bg);background-image:repeating-linear-gradient(90deg,transparent 0 79px,color-mix(in srgb,var(--accent) 3%,transparent) 79px 80px); }
+:root[data-style='gotham'] .page-pane { background-color:var(--bg); }
 :root[data-style='gotham'] :is(.page-heading h1,.hero-copy h2,.brand,.player-song-heading h1,.artist-profile h1,.album-profile h1,.collection-hero h1) { font-family:'Sonora Deco',Georgia,serif;font-weight:400;letter-spacing:-.025em; }
 :root[data-style='gotham'] .page-heading h1 { font-size:clamp(29px,6.5vw,38px);line-height:1.2; }
 :root[data-style='gotham'] .eyebrow { color:var(--accent-readable);font-size:9px;letter-spacing:.2em;font-weight:500; }
@@ -313,7 +314,6 @@
 :root[data-style='gotham'][data-photo='true'] .page-pane { background-color:color-mix(in srgb,var(--bg) calc(var(--photo-dim,.7) * 100%),transparent); }
 /* After hours: let the city, lamplight and record-sleeve styling lead. */
 :root[data-style='gotham'] { --gotham-crimson:color-mix(in srgb,var(--accent) 18%,#762e43);--gotham-cobalt:color-mix(in srgb,var(--bg) 45%,#203a65); }
-:root[data-style='gotham'] .page-pane { background-image:linear-gradient(180deg,color-mix(in srgb,var(--bg) 75%,transparent),var(--bg) 700px),url('/themes/gotham-nights.svg');background-position:center top,right top;background-size:100% 100%,auto 760px;background-repeat:no-repeat;background-attachment:local; }
 :root[data-style='gotham'] .page-heading h1 { color:var(--gotham-paper);font-size:clamp(29px,6.7vw,40px); }
 :root[data-style='gotham'] .page-heading { padding-bottom:15px;border-bottom:3px double var(--gotham-line); }
 :root[data-style='gotham'] .listening-hero { min-height:410px;border:1px solid color-mix(in srgb,var(--accent) 55%,var(--bg));box-shadow:0 12px 30px #0005,inset 0 0 0 5px var(--gotham-deep); }
@@ -395,11 +395,9 @@
 :root[data-style='pink'] .bottom-player-bar{background:var(--pink-paper);border:1px solid var(--pink-line);border-radius:18px;box-shadow:0 -3px 12px #7f31570a;}:root[data-style='pink'] .mini-artwork{border-radius:11px;}:root[data-style='pink'] .app-dock{background:var(--bg);border-color:var(--pink-line);}:root[data-style='pink'] .nav-active-pill::after{width:20px;height:4px;border-radius:50%;background:var(--accent);}:root[data-style='pink'] .mini-play{color:var(--accent-readable);}
 :root[data-style='pink'] :is(.dialog-sheet,.queue-sheet){background:var(--pink-paper);border-color:var(--pink-line);border-radius:24px;}:root[data-style='pink'] .player-sheet{background:var(--bg);}:root[data-style='pink'] .player-sheet::before{content:'';position:absolute;inset:0;background:url('/themes/pink-energy.svg') right bottom/auto 58% no-repeat;opacity:.22;pointer-events:none;}:root[data-style='pink'] .player-ambience{display:none;}
 :root[data-style='pink'] .player-artwork{border:8px solid var(--pink-paper);border-radius:22px;box-shadow:0 0 0 1px var(--pink-line),5px 7px 0 var(--pink-line);}:root[data-style='pink'] .player-main-play{border-radius:24px;background:var(--accent);color:var(--accent-on);box-shadow:0 4px 0 var(--pink-line);}:root[data-style='pink'] .player-song-heading h1{font-size:32px;}:root[data-style='pink'] .seek-times{color:var(--text-dim);}
-/* Keep the skyline on its own stationary layer, outside Safari's scroll painting. */
-.stationary-city{display:none;position:absolute;inset:0;pointer-events:none;}
-:root[data-style='gotham']:not([data-photo='true']) .stationary-city{display:block;background:linear-gradient(180deg,color-mix(in srgb,var(--bg) 75%,transparent),var(--bg) 700px),url('/themes/gotham-nights.svg') right top/auto 760px no-repeat;transform:translateZ(0);contain:paint;}
-:root[data-style='gotham'] .page-pane{background-image:none;background-attachment:scroll;}
-:root[data-style='gotham']:not([data-photo='true']) .page-pane{background-color:transparent;}
+/* Content-owned scenery follows native scrolling; no local/fixed attachment,
+   scroll handlers, filters or viewport-sized compositing layer to flicker. */
+:root[data-style='gotham']:not([data-photo='true']) .page-canvas::before{content:'';position:absolute;inset:0;z-index:-1;pointer-events:none;background-image:linear-gradient(180deg,color-mix(in srgb,var(--bg) 75%,transparent),var(--bg) 700px),url('/themes/gotham-nights.svg');background-position:center top,right top;background-size:100% 760px,auto 760px;background-repeat:no-repeat;}
 /* A full player already covers the app; blurring the entire app behind it wastes frames. */
 .overlay-player{backdrop-filter:none;-webkit-backdrop-filter:none;}
 :root[data-style='gotham'] .player-sheet::before{content:none;}
@@ -578,3 +576,8 @@
 
 
 .recap-ranked-row[data-offline-unavailable=true]{opacity:.4}
+
+/* Local mood cards: selection stays within the lyric sheet and never opens a download. */
+.lyrics-full-view .lyrics-heading{display:flex;align-items:center;gap:8px;min-width:0}.lyrics-heading>div{min-width:0}.lyrics-heading h2{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.lyrics-full-view>header{flex-shrink:0}.mood-start{display:flex;align-items:center;gap:10px;padding:14px 16px;border:1px solid var(--border);background:var(--selected);border-radius:var(--radius-md,12px);color:var(--accent-readable);font-size:13px;font-weight:650;flex-shrink:0}.mood-start>span{font-size:11px;font-weight:400;color:var(--text-muted);margin-left:auto}.mood-selection-heading{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text-muted);gap:12px}.mood-selection-heading>span{color:var(--accent-readable);font-variant-numeric:tabular-nums}.lyrics-lines .mood-lyric-choice{display:flex;gap:12px;align-items:flex-start;padding:14px 12px;border:1px solid transparent;border-radius:8px;margin:4px 0;font-size:20px;line-height:1.45;color:var(--text-primary);transition:background .15s,border-color .15s}.mood-line-check{display:grid;place-items:center;flex:none;width:22px;height:22px;border:1px solid var(--border);border-radius:50%;margin-top:3px;color:var(--accent-on)}.mood-lyric-choice[aria-pressed=true]{background:var(--selected);border-color:var(--border)}.mood-lyric-choice[aria-pressed=true] .mood-line-check{background:var(--accent);border-color:transparent}.mood-lyric-choice:disabled{opacity:.35}.mood-preview{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;display:flex;align-items:flex-start;justify-content:center;padding:12px 0}.mood-card-image{display:block;width:100%;height:auto;flex:none;max-width:650px;-webkit-touch-callout:default;user-select:auto;box-shadow:0 8px 24px #0002}.mood-footer{display:flex;flex-direction:column;gap:10px;flex-shrink:0;padding-bottom:4px}.mood-footer>p{color:var(--text-muted);font-size:11px;line-height:1.5;text-align:center}.mood-primary{display:flex;justify-content:center;align-items:center;gap:10px;border-radius:var(--radius-md,12px);min-height:48px;padding:12px 18px;font-size:14px;font-weight:650;background:var(--accent);color:var(--accent-on)}.mood-primary:disabled{opacity:.45}.mood-error{font-size:12px;color:var(--accent-readable);line-height:1.5;flex-shrink:0}:root[data-style=retro] :is(.mood-start,.mood-primary,.mood-lyric-choice,.mood-line-check){border-radius:0}:root[data-style=gotham] :is(.mood-start,.mood-primary,.mood-lyric-choice){border-radius:2px}:root[data-style=notebook] .mood-card-image{transform:rotate(-.5deg)}@media(max-width:380px){.mood-start>span{display:none}.lyrics-lines .mood-lyric-choice{font-size:18px;padding-inline:7px}.lyrics-full-view.lyrics-selecting{padding:16px;gap:12px}}@media(prefers-reduced-motion:reduce){.lyrics-lines .mood-lyric-choice{transition:none}}
+
+.mood-aspect{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;color:var(--text-muted)}.mood-aspect>div{display:flex;gap:4px;padding:3px;border:1px solid var(--border);border-radius:var(--radius-md,12px);background:var(--surface)}.mood-aspect button{min-height:40px;padding:8px 14px;border-radius:var(--radius-sm,8px);font-weight:650;color:var(--text-dim)}.mood-aspect button[aria-pressed=true]{color:var(--accent-readable);background:var(--selected)}.mood-aspect button:disabled{opacity:.5}:root[data-style=retro] .mood-aspect :is(div,button){border-radius:0}:root[data-style=gotham] .mood-aspect :is(div,button){border-radius:2px}
